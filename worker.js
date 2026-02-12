@@ -39,9 +39,7 @@ function getRandomSVG() {
  * 渲染单个网站卡片（优化版）
  */
 function renderSiteCard(site) {
-  const logoHTML = site.logo
-    ? `<img src="${site.logo}" alt="${site.name}"/>`
-    : getRandomSVG();
+  const logoHTML = getRandomSVG();
 
   return `
     <div class="channel-card" data-id="${site.id}">
@@ -217,9 +215,9 @@ function renderSiteCard(site) {
                 }
                 await env.NAV_DB.prepare('UPDATE sites SET sort_order = sort_order + 1 WHERE sort_order >= ? AND sort_order != 9999').bind(targetSortOrder).run();
                 await env.NAV_DB.prepare(`
-                    INSERT INTO sites (name, url, logo, desc, catelog, sort_order)
+                    INSERT INTO sites (name, url, desc, logo, catelog, sort_order)
                     VALUES (?, ?, ?, ?, ?, ?)
-                `).bind(config.name, config.url, config.logo, config.desc, config.catelog, targetSortOrder).run();
+                `).bind(config.name, config.url, config.desc, config.logo, config.catelog, targetSortOrder).run();
                 await env.NAV_DB.prepare('DELETE FROM pending_sites WHERE id = ?').bind(id).run();
                 return new Response(JSON.stringify({
                     code: 200,
@@ -256,15 +254,15 @@ function renderSiteCard(site) {
        async submitConfig(request, env, ctx) {
           try{
               const config = await request.json();
-              const { name, url, logo, desc, catelog, sort_order } = config;
+              const { name, url, desc, logo, catelog, sort_order } = config;
   
               if (!name || !url || !catelog ) {
                   return this.errorResponse('Name, URL and Catelog are required', 400);
               }
               await env.NAV_DB.prepare(`
-                  INSERT INTO pending_sites (name, url, logo, desc, catelog, sort_order)
+                  INSERT INTO pending_sites (name, url, desc, logo, catelog, sort_order)
                   VALUES (?, ?, ?, ?, ?, ?)
-            `).bind(name, url, logo, desc, catelog, sort_order || 9999).run();
+            `).bind(name, url, desc, logo, catelog, sort_order || 9999).run();
   
             return new Response(JSON.stringify({
               code: 201,
@@ -283,7 +281,7 @@ function renderSiteCard(site) {
           try{
               const config = await request.json();
               //- [新增] 从请求体中获取 sort_order
-              const { name, url, logo, desc, catelog, sort_order } = config;
+              const { name, url, desc, catelog, sort_order } = config;
   
               if (!name || !url || !catelog ) {
                   return this.errorResponse('Name, URL and Catelog are required', 400);
@@ -305,9 +303,9 @@ function renderSiteCard(site) {
               
               //- [优化] INSERT 语句增加了 sort_order 字段
               const insert = await env.NAV_DB.prepare(`
-                    INSERT INTO sites (name, url, logo, desc, catelog, sort_order)
-                    VALUES (?, ?, ?, ?, ?, ?)
-              `).bind(name, url, logo, desc, catelog, targetSortOrder).run(); // 使用目标排序号
+                    INSERT INTO sites (name, url, desc, catelog, sort_order)
+                    VALUES (?, ?, ?, ?, ?)
+              `).bind(name, url, desc, catelog, targetSortOrder).run(); // 使用目标排序号
   
             return new Response(JSON.stringify({
               code: 201,
@@ -326,8 +324,7 @@ function renderSiteCard(site) {
 		async updateConfig(request, env, ctx, id) {
           try {
               const config = await request.json();
-              //- [新增] 从请求体中获取 sort_order
-              const { name, url, logo, desc, catelog, sort_order } = config;
+              const { name, url, desc, logo, catelog, sort_order } = config;
               
               // [修改] 新的排序逻辑
               let targetSortOrder = 9999; // 默认值
@@ -353,12 +350,11 @@ function renderSiteCard(site) {
                   }
               }
   
-            //- [优化] UPDATE 语句增加了 sort_order 字段
             const update = await env.NAV_DB.prepare(`
                 UPDATE sites
-                SET name = ?, url = ?, logo = ?, desc = ?, catelog = ?, sort_order = ?, update_time = CURRENT_TIMESTAMP
+                SET name = ?, url = ?, desc = ?, logo = ?, catelog = ?, sort_order = ?, update_time = CURRENT_TIMESTAMP
                 WHERE id = ?
-            `).bind(name, url, logo, desc, catelog, targetSortOrder, id).run();
+            `).bind(name, url, desc, logo, catelog, targetSortOrder, id).run();
             return new Response(JSON.stringify({
                 code: 200,
                 message: 'Config updated successfully',
@@ -418,9 +414,9 @@ function renderSiteCard(site) {
 
           const insertStatements = sitesToImport.map(item =>
                 env.NAV_DB.prepare(`
-                        INSERT INTO sites (name, url, logo, desc, catelog, sort_order)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                  `).bind(item.name || null, item.url || null, item.logo || null, item.desc || null, item.catelog || null, item.sort_order || 9999)
+                        INSERT INTO sites (name, url, desc, catelog, sort_order)
+                        VALUES (?, ?, ?, ?, ?)
+                  `).bind(item.name || null, item.url || null, item.desc || null, item.catelog || null, item.sort_order || 9999)
             )
   
           // 使用 D1 的 batch 操作，效率更高
@@ -625,6 +621,12 @@ async exportConfig(request, env, ctx) {
           text-align: center;
           white-space: nowrap;
         }
+        td.logo-cell {
+          max-width: 60px;
+          min-width: 40px;
+          text-align: center;
+          white-space: nowrap;
+        }
         td.name-cell, td.desc-cell, td.catelog-cell {
           max-width: 120px;
           min-width: 80px;
@@ -717,7 +719,6 @@ async exportConfig(request, env, ctx) {
           <div class="add-new">
             <input type="text" id="addName" placeholder="Name" required>
             <input type="text" id="addUrl" placeholder="URL" required>
-            <input type="text" id="addLogo" placeholder="Logo(optional)">
             <input type="text" id="addDesc" placeholder="Description(optional)">
             <input type="text" id="addCatelog" placeholder="Catelog" required>
             <input type="number" id="addSortOrder" placeholder="排序 (数字小靠前)">
@@ -736,10 +737,10 @@ async exportConfig(request, env, ctx) {
                                 <tr>
                                   <th>Name</th>
                                   <th>URL</th>
-                                  <th>Logo</th>
                                   <th>Description</th>
                                   <th>Catelog</th>
-                                  <th class="sort-th">排序</th> <!-- [新增] 表格头增加排序 -->
+                                  <th class="sort-th">图标</th>
+                                  <th class="sort-th">排序</th>
                                   <th>Actions</th>
                                 </tr>
                             </thead>
@@ -763,10 +764,10 @@ async exportConfig(request, env, ctx) {
                         <tr>
                              <th>Name</th>
                              <th>URL</th>
-                            <th>Logo</th>
                             <th>Description</th>
                             <th>Catelog</th>
-                            <th class="sort-th">排序</th> <!-- [新增] 表格头增加排序 -->
+                            <th class="sort-th">图标</th>
+                            <th class="sort-th">排序</th>
                             <th>Actions</th>
                         </tr>
                         </thead>
@@ -1094,7 +1095,6 @@ async exportConfig(request, env, ctx) {
           const addBtn = document.getElementById('addBtn');
           const addName = document.getElementById('addName');
           const addUrl = document.getElementById('addUrl');
-          const addLogo = document.getElementById('addLogo');
           const addDesc = document.getElementById('addDesc');
           const addCatelog = document.getElementById('addCatelog');
 		  const addSortOrder = document.getElementById('addSortOrder'); // [新增] 获取排序输入框
@@ -1161,14 +1161,14 @@ async exportConfig(request, env, ctx) {
                 <input type="text" id="editName" required><br>
                 <label for="editUrl">URL:</label>
                 <input type="text" id="editUrl" required><br>
-                <label for="editLogo">Logo(可选):</label>
-                <input type="text" id="editLogo"><br>
                 <label for="editDesc">描述(可选):</label>
                 <input type="text" id="editDesc"><br>
+                <label for="editLogo">图标 URL(可选):</label>
+                <input type="text" id="editLogo"><br>
                 <label for="editCatelog">分类:</label>
                 <input type="text" id="editCatelog" required><br>
-			    <label for="editSortOrder">排序:</label> <!-- [新增] -->
-                <input type="number" id="editSortOrder"><br> <!-- [新增] -->
+			    <label for="editSortOrder">排序:</label>
+                <input type="number" id="editSortOrder"><br>
                 <button type="submit">保存</button>
               </form>
             </div>
@@ -1186,10 +1186,10 @@ async exportConfig(request, env, ctx) {
             const id = document.getElementById('editId').value;
             const name = document.getElementById('editName').value;
             const url = document.getElementById('editUrl').value;
-            const logo = document.getElementById('editLogo').value;
             const desc = document.getElementById('editDesc').value;
+            const logo = document.getElementById('editLogo').value;
             const catelog = document.getElementById('editCatelog').value;
-                const sort_order = document.getElementById('editSortOrder').value; // [新增]
+                const sort_order = document.getElementById('editSortOrder').value;
             fetch(\`/api/config/\${id}\`, {
               method: 'PUT',
               headers: {
@@ -1198,10 +1198,10 @@ async exportConfig(request, env, ctx) {
               body: JSON.stringify({
                 name,
                 url,
-                logo,
                 desc,
+                logo,
                 catelog,
-				sort_order // [新增]
+				sort_order
               })
             }).then(res => res.json())
               .then(data => {
@@ -1224,8 +1224,7 @@ async exportConfig(request, env, ctx) {
                   url = \`/api/config?page=\${page}&pageSize=\${pageSize}&keyword=\${keyword}\`
               }
               
-              // [优化] 显示加载状态
-              configTableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 20px;">加载中...</td></tr>';
+              configTableBody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 20px;">加载中...</td></tr>';
               
               fetch(url)
                   .then(res => res.json())
@@ -1250,23 +1249,24 @@ async exportConfig(request, env, ctx) {
               })
           }
           function renderConfig(configs) {
-          // [优化] 使用DocumentFragment减少DOM操作
           const fragment = document.createDocumentFragment();
           
            if (configs.length === 0) {
                 const row = document.createElement('tr');
-                row.innerHTML = '<td colspan="6">没有配置数据</td>';
+                row.innerHTML = '<td colspan="7">没有配置数据</td>';
                 fragment.appendChild(row);
             } else {
                 configs.forEach(config => {
                     const row = document.createElement('tr');
-                     row.innerHTML = \`
+                    row.innerHTML = \`
                         <td class="name-cell">\${config.name}</td>
                         <td class="url-cell"><a href="\${config.url}" target="_blank">\${config.url}</a></td>
-                        <td>\${config.logo ? \`<img src="\${config.logo}" style="width:30px;" />\` : 'N/A'}</td>
                         <td class="desc-cell">\${config.desc || 'N/A'}</td>
                         <td class="catelog-cell">\${config.catelog}</td>
-                        <td class="sort-cell">\${config.sort_order === 9999 ? '默认' : config.sort_order}</td> <!-- [新增] 显示排序值 -->
+                        <td class="logo-cell">
+                          \${config.logo ? \`<img src="\${config.logo}" alt="logo" style="width:32px;height:32px;object-fit:contain;" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%23666%22><text x=%2250%%22 y=%2250%%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 font-size=%2212%22>\${config.name.charAt(0).toUpperCase()}</text></svg>'"/>\` : '<span style="color:#999;font-size:12px;">无</span>'}
+                        </td>
+                        <td class="sort-cell">\${config.sort_order === 9999 ? '默认' : config.sort_order}</td>
                         <td class="actions">
                           <button class="edit-btn" data-id="\${config.id}">编辑</button>
                           <button class="del-btn" data-id="\${config.id}">删除</button>
@@ -1276,7 +1276,6 @@ async exportConfig(request, env, ctx) {
                 });
             }
             
-            // [优化] 一次性清空和添加，减少DOM操作
             configTableBody.innerHTML = '';
             configTableBody.appendChild(fragment);
             bindActionEvents();
@@ -1313,16 +1312,16 @@ async exportConfig(request, env, ctx) {
             const editId = document.getElementById('editId');
             const editName = document.getElementById('editName');
             const editUrl = document.getElementById('editUrl');
-            const editLogo = document.getElementById('editLogo');
             const editDesc = document.getElementById('editDesc');
+            const editLogo = document.getElementById('editLogo');
             const editCatelog = document.getElementById('editCatelog');
             const editSortOrder = document.getElementById('editSortOrder');
             
             editId.value = configToEdit.id;
             editName.value = configToEdit.name;
             editUrl.value = configToEdit.url;
-            editLogo.value = configToEdit.logo || '';
             editDesc.value = configToEdit.desc || '';
+            editLogo.value = configToEdit.logo || '';
             editCatelog.value = configToEdit.catelog;
             editSortOrder.value = configToEdit.sort_order === 9999 ? '' : configToEdit.sort_order;
             
@@ -1391,7 +1390,6 @@ async exportConfig(request, env, ctx) {
           addBtn.addEventListener('click', () => {
             const name = addName.value;
             const url = addUrl.value;
-            const logo = addLogo.value;
             const desc = addDesc.value;
              const catelog = addCatelog.value;
           const sort_order = addSortOrder.value; // [新增]			 
@@ -1406,7 +1404,6 @@ async exportConfig(request, env, ctx) {
           body: JSON.stringify({
              name,
              url,
-             logo,
              desc,
               catelog,
               sort_order
@@ -1417,7 +1414,6 @@ async exportConfig(request, env, ctx) {
                  showMessage('添加成功', 'success');
                 addName.value = '';
                 addUrl.value = '';
-                addLogo.value = '';
                 addDesc.value = '';
                  addCatelog.value = '';
         addSortOrder.value = ''; // [新增]				 
@@ -1491,8 +1487,7 @@ async exportConfig(request, env, ctx) {
           
           
           function fetchPendingConfigs(page = pendingCurrentPage) {
-                  // [优化] 显示加载状态
-                  pendingTableBody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 20px;">加载中...</td></tr>';
+                  pendingTableBody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 20px;">加载中...</td></tr>';
                   
                   fetch(\`/api/pending?page=\${page}&pageSize=\${pendingPageSize}\`)
                       .then(res => res.json())
@@ -1517,12 +1512,11 @@ async exportConfig(request, env, ctx) {
           }
           
             function renderPendingConfig(configs) {
-                  // [优化] 使用DocumentFragment减少DOM操作
                   const fragment = document.createDocumentFragment();
                   
                   if(configs.length === 0) {
                       const row = document.createElement('tr');
-                      row.innerHTML = '<td colspan="7">没有待审核数据</td>';
+                      row.innerHTML = '<td colspan="8">没有待审核数据</td>';
                       fragment.appendChild(row);
                   } else {
                     configs.forEach(config => {
@@ -1530,10 +1524,12 @@ async exportConfig(request, env, ctx) {
                         row.innerHTML = \`
                           <td class="name-cell">\${config.name}</td>
                            <td class="url-cell"><a href="\${config.url}" target="_blank">\${config.url}</a></td>
-                           <td>\${config.logo ? \`<img src="\${config.logo}" style="width:30px;" />\` : 'N/A'}</td>
                            <td class="desc-cell">\${config.desc || 'N/A'}</td>
                            <td class="catelog-cell">\${config.catelog}</td>
-                            <td class="sort-cell">\${config.sort_order === 9999 ? '默认' : config.sort_order}</td> <!-- [新增] 显示排序值 -->
+                           <td class="logo-cell">
+                             \${config.logo ? \`<img src="\${config.logo}" alt="logo" style="width:32px;height:32px;object-fit:contain;" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%23666%22><text x=%2250%%22 y=%2250%%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 font-size=%2212%22>\${config.name.charAt(0).toUpperCase()}</text></svg>'"/>\` : '<span style="color:#999;font-size:12px;">无</span>'}
+                           </td>
+                            <td class="sort-cell">\${config.sort_order === 9999 ? '默认' : config.sort_order}</td>
                             <td class="actions">
                                 <button class="approve-btn" data-id="\${config.id}">批准</button>
                               <button class="reject-btn" data-id="\${config.id}">拒绝</button>
@@ -1543,7 +1539,6 @@ async exportConfig(request, env, ctx) {
                     });
                   }
                   
-                  // [优化] 一次性清空和添加
                   pendingTableBody.innerHTML = '';
                   pendingTableBody.appendChild(fragment);
                   bindPendingActionEvents();
@@ -1880,6 +1875,12 @@ async exportConfig(request, env, ctx) {
     // 根据 URL 参数筛选站点
     const currentCatalog = catalog || catalogs[0];
     const currentSites = catalog ? sites.filter(s => s.catelog === currentCatalog) : sites;
+
+    // 为每个站点提取首字母
+    const sitesWithFirstLetter = currentSites.map(site => {
+      const firstLetter = site.name ? site.name.charAt(0).toUpperCase() : '';
+      return { ...site, firstLetter };
+    });
     // 优化后的 HTML
     const html = `
     <!DOCTYPE html>
@@ -1889,7 +1890,7 @@ async exportConfig(request, env, ctx) {
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <title>琪舟阁 - 指路人，亦是摘星人</title>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet"/>
-      <link rel="icon" href="https://img.520jacky.dpdns.org/i/2025/06/03/031992.png" type="image/webp"/>
+      <link rel="icon" href="https://img.520jacky.dpdns.org/i/2026/02/12/866586.webp" type="image/webp"/>
       <script src="https://cdn.tailwindcss.com"></script>
       <script>
         tailwind.config = {
@@ -2114,156 +2115,6 @@ async exportConfig(request, env, ctx) {
               后台管理
             </a>
           </div>
-          <!-- 自定义音乐播放器（侧边栏底部，API直连） -->
-          <div class="mt-8 mb-2">
-            <div class="rounded-2xl shadow-lg border-2 border-primary-100 bg-gradient-to-r from-white via-blue-50 to-blue-100 p-3 flex flex-col items-center w-full">
-              <div class="w-full text-center mb-2 text-sm font-bold text-primary-700">🎵 听点音乐</div>
-              <!-- 歌单切换输入框 -->
-              <div class="flex w-full items-center gap-2 mb-2">
-                <input id="playlistIdInput" type="text" placeholder="输入歌单ID" class="flex-1 px-2 py-1 rounded border border-primary-200 focus:ring-2 focus:ring-primary-200 focus:border-primary-400 text-xs" style="min-width:0;" />
-                <button id="changePlaylistBtn" class="px-3 py-1 rounded bg-gradient-to-r from-primary-200 via-secondary-200 to-accent-200 text-primary-800 font-bold shadow hover:from-primary-400 hover:to-accent-400 transition-all duration-200 text-xs">切换</button>
-              </div>
-              <div id="playlist-box" class="w-full mb-2 max-h-60 overflow-y-auto rounded-lg bg-white bg-opacity-70 border border-primary-100 shadow-inner"></div>
-              <audio id="custom-audio" controls class="w-full rounded-lg" preload="none" style="outline:none;width:100%!important;min-width:0;max-width:none;"></audio>
-              <div class="flex w-full justify-center items-center gap-4 mt-3">
-                <button id="prevSong" class="px-4 py-2 rounded-full bg-gradient-to-r from-primary-200 via-secondary-200 to-accent-200 text-primary-800 font-bold shadow hover:from-primary-400 hover:to-accent-400 transition-all duration-200 text-sm">⏮ 上一首</button>
-                <span id="currentSongName" class="text-sm text-primary-700 font-semibold px-2"></span>
-                <button id="nextSong" class="px-4 py-2 rounded-full bg-gradient-to-r from-primary-200 via-secondary-200 to-accent-200 text-primary-800 font-bold shadow hover:from-primary-400 hover:to-accent-400 transition-all duration-200 text-sm">下一首 ⏭</button>
-              </div>
-            </div>
-            <script>
-              let playlistId = 3136952023;
-              let songList = [];
-              let currentIndex = 0;
-              const playlistBox = document.getElementById('playlist-box');
-              const audio = document.getElementById('custom-audio');
-              const prevBtn = document.getElementById('prevSong');
-              const nextBtn = document.getElementById('nextSong');
-              const currentSongName = document.getElementById('currentSongName');
-              const playlistIdInput = document.getElementById('playlistIdInput');
-              const changePlaylistBtn = document.getElementById('changePlaylistBtn');
-
-              function playSong(index) {
-                if (!songList[index]) return;
-                const song = songList[index];
-                fetch('https://musicapi.qizou.dpdns.org/song/url?id=' + song.id)
-                  .then(res => res.json())
-                  .then(data => {
-                    if (data && data.data && data.data[0] && data.data[0].url) {
-                      audio.src = data.data[0].url;
-                      audio.play();
-                      currentSongName.innerText = song.name + (song.ar ? ' - ' + song.ar[0].name : '');
-                      currentIndex = index;
-                      renderPlaylist();
-                    } else {
-                      currentSongName.innerText = '无法播放';
-                    }
-                  })
-                  .catch(() => {
-                    currentSongName.innerText = '加载失败';
-                  });
-              }
-
-              function renderPlaylist() {
-                playlistBox.innerHTML = '';
-                songList.forEach((song, idx) => {
-                  const btn = document.createElement('button');
-                  btn.innerText = (idx+1) + '. ' + song.name + (song.ar ? ' - ' + song.ar[0].name : '');
-                  btn.className = 'block w-full text-left px-2 py-1 rounded-lg mb-1 text-xs transition-all duration-150 ' + (idx === currentIndex ? 'bg-gradient-to-r from-primary-200 via-secondary-200 to-accent-200 text-primary-900 font-bold shadow' : 'hover:bg-primary-100 text-primary-700');
-                  btn.onclick = function() { playSong(idx); };
-                  playlistBox.appendChild(btn);
-                });
-              }
-
-              function loadPlaylist(newId) {
-                playlistBox.innerText = '加载中...';
-                // 先尝试按歌单加载
-                fetch('https://musicapi.qizou.dpdns.org/playlist/track/all?id=' + newId + '&limit=1000')
-                  .then(res => res.json())
-                  .then(data => {
-                    if (data && data.songs && data.songs.length > 0) {
-                      // 歌单
-                      songList = data.songs;
-                      currentIndex = 0;
-                      renderPlaylist();
-                      playSong(0);
-                    } else {
-                      // 尝试按单曲加载
-                      fetch('https://musicapi.qizou.dpdns.org/song/detail?ids=' + newId)
-                        .then(res => res.json())
-                        .then(songData => {
-                          if (songData && songData.songs && songData.songs.length > 0) {
-                            songList = [songData.songs[0]];
-                            currentIndex = 0;
-                            renderPlaylist();
-                            playSong(0);
-                          } else {
-                            playlistBox.innerText = '未找到歌单或歌曲';
-                            songList = [];
-                            currentIndex = 0;
-                            currentSongName.innerText = '';
-                            audio.src = '';
-                          }
-                        })
-                        .catch(() => {
-                          playlistBox.innerText = '加载失败';
-                          songList = [];
-                          currentIndex = 0;
-                          currentSongName.innerText = '';
-                          audio.src = '';
-                        });
-                    }
-                  })
-                  .catch(() => {
-                    playlistBox.innerText = '加载失败';
-                    songList = [];
-                    currentIndex = 0;
-                    currentSongName.innerText = '';
-                    audio.src = '';
-                  });
-              }
-
-              prevBtn.onclick = function() {
-                if (songList.length === 0) return;
-                let idx = currentIndex - 1;
-                if (idx < 0) idx = songList.length - 1;
-                playSong(idx);
-              };
-              nextBtn.onclick = function() {
-                if (songList.length === 0) return;
-                let idx = currentIndex + 1;
-                if (idx >= songList.length) idx = 0;
-                playSong(idx);
-              };
-
-              // 自动切下一首
-              audio.onended = function() {
-                nextBtn.onclick();
-              };
-
-              // 切换歌单按钮事件
-              changePlaylistBtn.onclick = function() {
-                const val = playlistIdInput.value.trim();
-                if (/^\\d+$/.test(val)) {
-                  playlistId = val;
-                  loadPlaylist(playlistId);
-                } else {
-                  playlistIdInput.value = '';
-                  playlistIdInput.placeholder = '请输入有效歌单ID';
-                }
-              };
-
-              // 回车也能切换
-              playlistIdInput.addEventListener('keydown', function(e) {
-                if (e.key === 'Enter') {
-                  changePlaylistBtn.onclick();
-                }
-              });
-
-              // 初始化加载默认歌单
-              loadPlaylist(playlistId);
-            </script>
-          </div>
         </div>
       </aside>
       
@@ -2367,17 +2218,16 @@ async exportConfig(request, env, ctx) {
           </div>
           <!-- 网站卡片网格 -->
           <div id="sitesGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
-            ${currentSites.map(site => `
+            ${sitesWithFirstLetter.map(site => `
               <div class="site-card group rounded-3xl shadow-2xl border-2 border-transparent hover:border-accent-300 bg-gradient-to-br from-white via-primary-50 to-accent-50 hover:from-primary-100 hover:to-accent-100 transition-all duration-300 relative overflow-hidden" data-name="${site.name || ''}" data-url="${site.url || ''}" data-catalog="${site.catelog || ''}">
                 <div class="absolute -top-10 -right-10 w-32 h-32 bg-gradient-to-br from-primary-200 via-accent-100 to-secondary-100 rounded-full opacity-30 blur-2xl z-0"></div>
                 <div class="p-7 relative z-10 flex flex-col h-full">
                   <a href="${site.url}" target="_blank" class="block">
                     <div class="flex items-center mb-4">
                       <div class="flex-shrink-0 mr-5">
-                        ${site.logo 
-                          ? `<img src="${site.logo}" alt="${site.name}" class="w-16 h-16 rounded-2xl object-cover bg-gradient-to-br from-primary-100 to-accent-100 shadow-lg border-2 border-primary-200">`
-                          : `<div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-400 via-secondary-400 to-accent-400 flex items-center justify-center text-white font-extrabold text-3xl shadow-lg border-2 border-primary-200">${site.name.charAt(0).toUpperCase()}</div>`
-                        }
+                        <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-400 via-secondary-400 to-accent-400 flex items-center justify-center text-white font-extrabold text-3xl shadow-lg border-2 border-primary-200 overflow-hidden">
+                          ${site.logo && site.logo.trim() ? `<img src="${site.logo}" alt="${site.name}" onerror="this.style.display='none'; this.parentElement.innerText='${site.firstLetter}';" class="w-full h-full object-contain p-2"/>` : `<span>${site.firstLetter}</span>`}
+                        </div>
                       </div>
                       <div class="flex-1 min-w-0">
                         <h3 class="text-lg font-bold bg-gradient-to-r from-primary-500 via-secondary-500 to-accent-500 bg-clip-text text-transparent truncate">${site.name}</h3>
@@ -2459,12 +2309,12 @@ async exportConfig(request, env, ctx) {
                 <input type="text" id="addSiteUrl" required class="mt-1 block w-full px-4 py-2 border-2 border-primary-100 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400 transition"/>
               </div>
               <div>
-                <label for="addSiteLogo" class="block text-sm font-medium text-gray-700 mb-1">Logo (可选)</label>
-                <input type="text" id="addSiteLogo" class="mt-1 block w-full px-4 py-2 border-2 border-primary-100 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400 transition"/>
-              </div>
-              <div>
                 <label for="addSiteDesc" class="block text-sm font-medium text-gray-700 mb-1">描述 (可选)</label>
                 <textarea id="addSiteDesc" rows="2" class="mt-1 block w-full px-4 py-2 border-2 border-primary-100 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400 transition"></textarea>
+              </div>
+              <div>
+                <label for="addSiteLogo" class="block text-sm font-medium text-gray-700 mb-1">图标 URL (可选)</label>
+                <input type="text" id="addSiteLogo" class="mt-1 block w-full px-4 py-2 border-2 border-primary-100 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400 transition" placeholder="留空则自动获取网站图标"/>
               </div>
               <div>
                 <label for="addSiteCatelog" class="block text-sm font-medium text-gray-700 mb-1">分类</label>
@@ -2632,8 +2482,8 @@ async exportConfig(request, env, ctx) {
               
               const name = document.getElementById('addSiteName').value;
               const url = document.getElementById('addSiteUrl').value;
-              const logo = document.getElementById('addSiteLogo').value;
               const desc = document.getElementById('addSiteDesc').value;
+              const logo = document.getElementById('addSiteLogo').value;
               const catelog = document.getElementById('addSiteCatelog').value;
               const sort_order = document.getElementById('addSiteSortOrder').value;
               
@@ -2642,7 +2492,7 @@ async exportConfig(request, env, ctx) {
                 headers: {
                   'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ name, url, logo, desc, catelog, sort_order })
+                body: JSON.stringify({ name, url, desc, logo, catelog, sort_order })
               })
               .then(res => res.json())
               .then(data => {
