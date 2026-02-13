@@ -720,6 +720,7 @@ async exportConfig(request, env, ctx) {
             <input type="text" id="addName" placeholder="Name" required>
             <input type="text" id="addUrl" placeholder="URL" required>
             <input type="text" id="addDesc" placeholder="Description(optional)">
+            <input type="text" id="addLogo" placeholder="Icon URL (optional)">
             <input type="text" id="addCatelog" placeholder="Catelog" required>
             <input type="number" id="addSortOrder" placeholder="排序 (数字小靠前)">
             <button id="addBtn">添加</button>
@@ -1096,6 +1097,7 @@ async exportConfig(request, env, ctx) {
           const addName = document.getElementById('addName');
           const addUrl = document.getElementById('addUrl');
           const addDesc = document.getElementById('addDesc');
+          const addLogo = document.getElementById('addLogo');
           const addCatelog = document.getElementById('addCatelog');
 		  const addSortOrder = document.getElementById('addSortOrder'); // [新增] 获取排序输入框
           
@@ -1391,6 +1393,7 @@ async exportConfig(request, env, ctx) {
             const name = addName.value;
             const url = addUrl.value;
             const desc = addDesc.value;
+            const logo = addLogo.value;
              const catelog = addCatelog.value;
           const sort_order = addSortOrder.value; // [新增]			 
             if(!name ||    !url || !catelog) {
@@ -1405,6 +1408,7 @@ async exportConfig(request, env, ctx) {
              name,
              url,
              desc,
+             logo,
               catelog,
               sort_order
           })
@@ -1415,6 +1419,7 @@ async exportConfig(request, env, ctx) {
                 addName.value = '';
                 addUrl.value = '';
                 addDesc.value = '';
+                addLogo.value = '';
                  addCatelog.value = '';
         addSortOrder.value = ''; // [新增]				 
                  fetchConfigs();
