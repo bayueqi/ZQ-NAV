@@ -1,3 +1,6 @@
+/**
+ * 备用随机 SVG 图标 - 优化设计
+ */
 export const fallbackSVGIcons = [
   `<svg width="80" height="80" viewBox="0 0 24 24" fill="url(#gradient1)" xmlns="http://www.w3.org/2000/svg">
      <defs>
@@ -39,7 +42,9 @@ function getRandomSVG() {
  * 渲染单个网站卡片（优化版）
  */
 function renderSiteCard(site) {
-  const logoHTML = getRandomSVG();
+  const logoHTML = site.logo
+    ? `<img src="${site.logo}" alt="${site.name}"/>`
+    : getRandomSVG();
 
   return `
     <div class="channel-card" data-id="${site.id}">
@@ -60,6 +65,135 @@ function renderSiteCard(site) {
   `;
 }
 
+function escapeHTML(input) {
+  if (input === null || input === undefined) {
+    return '';
+  }
+  return String(input)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function sanitizeUrl(url) {
+  if (!url) {
+    return '';
+  }
+  const trimmed = String(url).trim();
+  try {
+    const direct = new URL(trimmed);
+    if (direct.protocol === 'http:' || direct.protocol === 'https:') {
+      return direct.href;
+    }
+  } catch (error) {
+    try {
+      const fallback = new URL(`https://${trimmed}`);
+      if (fallback.protocol === 'http:' || fallback.protocol === 'https:') {
+        return fallback.href;
+      }
+    } catch (e) {
+      return '';
+    }
+  }
+  return '';
+}
+
+function normalizeSortOrder(value) {
+  if (value === undefined || value === null || value === '') {
+    return 9999;
+  }
+  const parsed = Number(value);
+  if (Number.isFinite(parsed)) {
+    const clamped = Math.max(-2147483648, Math.min(2147483647, Math.round(parsed)));
+    return clamped;
+  }
+  return 9999;
+}
+
+function isSubmissionEnabled(env) {
+  const flag = env.ENABLE_PUBLIC_SUBMISSION;
+  if (flag === undefined || flag === null) {
+    return true;
+  }
+  const normalized = String(flag).trim().toLowerCase();
+  return normalized === 'true';
+}
+
+const SESSION_COOKIE_NAME = 'nav_admin_session';
+const SESSION_PREFIX = 'session:';
+const SESSION_TTL_SECONDS = 60 * 60 * 12; // 12小时会话
+
+function parseCookies(cookieHeader = '') {
+  return cookieHeader
+    .split(';')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .reduce((acc, pair) => {
+      const separatorIndex = pair.indexOf('=');
+      if (separatorIndex === -1) {
+        acc[pair] = '';
+      } else {
+        const key = pair.slice(0, separatorIndex).trim();
+        const value = pair.slice(separatorIndex + 1).trim();
+        acc[key] = value;
+      }
+      return acc;
+    }, {});
+}
+
+function buildSessionCookie(token, options = {}) {
+  const { maxAge = SESSION_TTL_SECONDS } = options;
+  const segments = [
+    `${SESSION_COOKIE_NAME}=${token}`,
+    'Path=/',
+    `Max-Age=${maxAge}`,
+    'HttpOnly',
+    'SameSite=Strict',
+    'Secure',
+  ];
+  return segments.join('; ');
+}
+
+async function createAdminSession(env) {
+  const token = crypto.randomUUID();
+  await env.NAV_AUTH.put(`${SESSION_PREFIX}${token}`, JSON.stringify({ createdAt: Date.now() }), {
+    expirationTtl: SESSION_TTL_SECONDS,
+  });
+  return token;
+}
+
+async function refreshAdminSession(env, token, payload) {
+  await env.NAV_AUTH.put(`${SESSION_PREFIX}${token}`, payload, { expirationTtl: SESSION_TTL_SECONDS });
+}
+
+async function destroyAdminSession(env, token) {
+  if (!token) return;
+  await env.NAV_AUTH.delete(`${SESSION_PREFIX}${token}`);
+}
+
+async function validateAdminSession(request, env) {
+  const cookies = parseCookies(request.headers.get('Cookie') || '');
+  const token = cookies[SESSION_COOKIE_NAME];
+  if (!token) {
+    return { authenticated: false };
+  }
+  const sessionKey = `${SESSION_PREFIX}${token}`;
+  const payload = await env.NAV_AUTH.get(sessionKey);
+  if (!payload) {
+    return { authenticated: false };
+  }
+  // 会话有效，刷新TTL
+  await refreshAdminSession(env, token, payload);
+  return { authenticated: true, token };
+}
+
+async function isAdminAuthenticated(request, env) {
+  const { authenticated } = await validateAdminSession(request, env);
+  return authenticated;
+}
+
   
   /**
    * 处理 API 请求
@@ -76,19 +210,49 @@ function renderSiteCard(site) {
                     case 'GET':
                         return await this.getConfig(request, env, ctx, url);
                     case 'POST':
+                        if (!(await isAdminAuthenticated(request, env))) {
+                            return this.errorResponse('Unauthorized', 401);
+                        }
                         return await this.createConfig(request, env, ctx);
                     default:
                         return this.errorResponse('Method Not Allowed', 405)
                 }
             }
             if (path === '/config/submit' && method === 'POST') {
+              if (!isSubmissionEnabled(env)) {
+                return this.errorResponse('Public submission disabled', 403);
+              }
               return await this.submitConfig(request, env, ctx);
            }
+           if (path === '/categories' && method === 'GET') {
+              if (!(await isAdminAuthenticated(request, env))) {
+                  return this.errorResponse('Unauthorized', 401);
+              }
+              return await this.getCategories(request, env, ctx);
+           }
+            if (path.startsWith('/categories/')) {
+                if (!(await isAdminAuthenticated(request, env))) {
+                    return this.errorResponse('Unauthorized', 401);
+                }
+                const categoryName = decodeURIComponent(path.replace('/categories/', ''));
+                switch (method) {
+                    case 'PUT':
+                        return await this.updateCategoryOrder(request, env, ctx, categoryName);
+                    default:
+                        return this.errorResponse('Method Not Allowed', 405);
+                }
+            }
             if (path === `/config/${id}` && /^\d+$/.test(id)) {
                 switch (method) {
                     case 'PUT':
+                        if (!(await isAdminAuthenticated(request, env))) {
+                            return this.errorResponse('Unauthorized', 401);
+                        }
                         return await this.updateConfig(request, env, ctx, id);
                     case 'DELETE':
+                        if (!(await isAdminAuthenticated(request, env))) {
+                            return this.errorResponse('Unauthorized', 401);
+                        }
                         return await this.deleteConfig(request, env, ctx, id);
                     default:
                         return this.errorResponse('Method Not Allowed', 405)
@@ -97,20 +261,35 @@ function renderSiteCard(site) {
               if (path.startsWith('/pending/') && /^\d+$/.test(id)) {
                 switch (method) {
                     case 'PUT':
+                        if (!(await isAdminAuthenticated(request, env))) {
+                            return this.errorResponse('Unauthorized', 401);
+                        }
                         return await this.approvePendingConfig(request, env, ctx, id);
                     case 'DELETE':
+                        if (!(await isAdminAuthenticated(request, env))) {
+                            return this.errorResponse('Unauthorized', 401);
+                        }
                         return await this.rejectPendingConfig(request, env, ctx, id);
                     default:
                         return this.errorResponse('Method Not Allowed', 405)
                 }
             }
             if (path === '/config/import' && method === 'POST') {
+                if (!(await isAdminAuthenticated(request, env))) {
+                    return this.errorResponse('Unauthorized', 401);
+                }
                 return await this.importConfig(request, env, ctx);
             }
             if (path === '/config/export' && method === 'GET') {
+                if (!(await isAdminAuthenticated(request, env))) {
+                    return this.errorResponse('Unauthorized', 401);
+                }
                 return await this.exportConfig(request, env, ctx);
             }
             if (path === '/pending' && method === 'GET') {
+              if (!(await isAdminAuthenticated(request, env))) {
+                  return this.errorResponse('Unauthorized', 401);
+              }
               return await this.getPendingConfig(request, env, ctx, url);
             }
             return this.errorResponse('Not Found', 404);
@@ -172,13 +351,13 @@ function renderSiteCard(site) {
                   return this.errorResponse(`Failed to fetch config data: ${e.message}`, 500)
               }
           },
-        async getPendingConfig(request, env, ctx, url) {
+      async getPendingConfig(request, env, ctx, url) {
             const page = parseInt(url.searchParams.get('page') || '1', 10);
             const pageSize = parseInt(url.searchParams.get('pageSize') || '10', 10);
             const offset = (page - 1) * pageSize;
             try {
                 const { results } = await env.NAV_DB.prepare(`
-                        SELECT * FROM pending_sites ORDER BY sort_order ASC, create_time DESC LIMIT ? OFFSET ?
+                        SELECT * FROM pending_sites ORDER BY create_time DESC LIMIT ? OFFSET ?
                     `).bind(pageSize, offset).all();
                   const countResult = await env.NAV_DB.prepare(`
                       SELECT COUNT(*) as total FROM pending_sites
@@ -204,22 +383,15 @@ function renderSiteCard(site) {
                 if(results.length === 0) {
                     return this.errorResponse('Pending config not found', 404);
                 }
-                const config = results[0];
-                // [修复] 批准时复用主列表排序逻辑
-                let targetSortOrder = 1;
-                if (!config.sort_order || config.sort_order === '' || config.sort_order === 9999) {
-                    const maxSortResult = await env.NAV_DB.prepare('SELECT MAX(sort_order) as max_sort FROM sites WHERE sort_order != 9999').first();
-                    targetSortOrder = (maxSortResult && maxSortResult.max_sort ? maxSortResult.max_sort + 1 : 1);
-                } else {
-                    targetSortOrder = parseInt(config.sort_order) || 1;
-                }
-                await env.NAV_DB.prepare('UPDATE sites SET sort_order = sort_order + 1 WHERE sort_order >= ? AND sort_order != 9999').bind(targetSortOrder).run();
+                 const config = results[0];
+                 //- [优化] 批准时，插入的数据也包含了 sort_order 的默认值
                 await env.NAV_DB.prepare(`
-                    INSERT INTO sites (name, url, desc, logo, catelog, sort_order)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                `).bind(config.name, config.url, config.desc, config.logo, config.catelog, targetSortOrder).run();
+                    INSERT INTO sites (name, url, logo, desc, catelog, sort_order)
+                    VALUES (?, ?, ?, ?, ?, 9999) 
+              `).bind(config.name, config.url, config.logo, config.desc, config.catelog).run();
                 await env.NAV_DB.prepare('DELETE FROM pending_sites WHERE id = ?').bind(id).run();
-                return new Response(JSON.stringify({
+  
+                 return new Response(JSON.stringify({
                     code: 200,
                     message: 'Pending config approved successfully'
                 }),{
@@ -234,15 +406,6 @@ function renderSiteCard(site) {
         async rejectPendingConfig(request, env, ctx, id) {
             try{
                 await env.NAV_DB.prepare('DELETE FROM pending_sites WHERE id = ?').bind(id).run();
-                // [新增] 删除后自动重新排序
-                const { results } = await env.NAV_DB.prepare('SELECT id FROM pending_sites ORDER BY sort_order ASC, create_time DESC').all();
-                let updates = [];
-                for (let i = 0; i < results.length; i++) {
-                    updates.push(env.NAV_DB.prepare('UPDATE pending_sites SET sort_order = ? WHERE id = ?').bind(i + 1, results[i].id));
-                }
-                if (updates.length > 0) {
-                    await env.NAV_DB.batch(updates);
-                }
                 return new Response(JSON.stringify({
                     code: 200,
                     message: 'Pending config rejected successfully',
@@ -253,16 +416,24 @@ function renderSiteCard(site) {
         },
        async submitConfig(request, env, ctx) {
           try{
+              if (!isSubmissionEnabled(env)) {
+                  return this.errorResponse('Public submission disabled', 403);
+              }
               const config = await request.json();
-              const { name, url, desc, logo, catelog, sort_order } = config;
+              const { name, url, logo, desc, catelog } = config;
+              const sanitizedName = (name || '').trim();
+              const sanitizedUrl = (url || '').trim();
+              const sanitizedCatelog = (catelog || '').trim();
+              const sanitizedLogo = (logo || '').trim() || null;
+              const sanitizedDesc = (desc || '').trim() || null;
   
-              if (!name || !url || !catelog ) {
+              if (!sanitizedName || !sanitizedUrl || !sanitizedCatelog ) {
                   return this.errorResponse('Name, URL and Catelog are required', 400);
               }
               await env.NAV_DB.prepare(`
-                  INSERT INTO pending_sites (name, url, desc, logo, catelog, sort_order)
-                  VALUES (?, ?, ?, ?, ?, ?)
-            `).bind(name, url, desc, logo, catelog, sort_order || 9999).run();
+                  INSERT INTO pending_sites (name, url, logo, desc, catelog)
+                  VALUES (?, ?, ?, ?, ?)
+            `).bind(sanitizedName, sanitizedUrl, sanitizedLogo, sanitizedDesc, sanitizedCatelog).run();
   
             return new Response(JSON.stringify({
               code: 201,
@@ -281,31 +452,22 @@ function renderSiteCard(site) {
           try{
               const config = await request.json();
               //- [新增] 从请求体中获取 sort_order
-              const { name, url, desc, catelog, sort_order } = config;
+              const { name, url, logo, desc, catelog, sort_order } = config;
+              const sanitizedName = (name || '').trim();
+              const sanitizedUrl = (url || '').trim();
+              const sanitizedCatelog = (catelog || '').trim();
+              const sanitizedLogo = (logo || '').trim() || null;
+              const sanitizedDesc = (desc || '').trim() || null;
+              const sortOrderValue = normalizeSortOrder(sort_order);
   
-              if (!name || !url || !catelog ) {
+              if (!sanitizedName || !sanitizedUrl || !sanitizedCatelog ) {
                   return this.errorResponse('Name, URL and Catelog are required', 400);
               }
-              
-              // [修改] 新的排序逻辑
-              let targetSortOrder = 1;
-              if (!sort_order || sort_order === '') {
-                  // 如果没填写排序号，自动分配最大序号+1
-                  const maxSortResult = await env.NAV_DB.prepare('SELECT MAX(sort_order) as max_sort FROM sites WHERE sort_order != 9999').first();
-                  targetSortOrder = (maxSortResult && maxSortResult.max_sort ? maxSortResult.max_sort + 1 : 1);
-              } else {
-                  // 如果填写了排序号，使用填写的值
-                  targetSortOrder = parseInt(sort_order) || 1;
-              }
-              
-              // 调整其他网站的排序号，为新网站腾出位置
-              await env.NAV_DB.prepare('UPDATE sites SET sort_order = sort_order + 1 WHERE sort_order >= ? AND sort_order != 9999').bind(targetSortOrder).run();
-              
               //- [优化] INSERT 语句增加了 sort_order 字段
               const insert = await env.NAV_DB.prepare(`
-                    INSERT INTO sites (name, url, desc, catelog, sort_order)
-                    VALUES (?, ?, ?, ?, ?)
-              `).bind(name, url, desc, catelog, targetSortOrder).run(); // 使用目标排序号
+                    INSERT INTO sites (name, url, logo, desc, catelog, sort_order)
+                    VALUES (?, ?, ?, ?, ?, ?)
+              `).bind(sanitizedName, sanitizedUrl, sanitizedLogo, sanitizedDesc, sanitizedCatelog, sortOrderValue).run(); // 如果sort_order未提供，则默认为9999
   
             return new Response(JSON.stringify({
               code: 201,
@@ -324,37 +486,24 @@ function renderSiteCard(site) {
 		async updateConfig(request, env, ctx, id) {
           try {
               const config = await request.json();
-              const { name, url, desc, logo, catelog, sort_order } = config;
-              
-              // [修改] 新的排序逻辑
-              let targetSortOrder = 9999; // 默认值
-              if (sort_order && sort_order !== '') {
-                  const inputSortOrder = parseInt(sort_order);
-                  if (!isNaN(inputSortOrder)) {
-                      targetSortOrder = inputSortOrder;
-                  }
-              }
-              
-              // 获取当前项目的排序号
-              const currentResult = await env.NAV_DB.prepare('SELECT sort_order FROM sites WHERE id = ?').bind(id).first();
-              const currentSortOrder = currentResult ? currentResult.sort_order : 9999;
-              
-              // 如果排序号发生变化，需要调整其他项目的排序号
-              if (targetSortOrder !== currentSortOrder && targetSortOrder !== 9999) {
-                  if (targetSortOrder < currentSortOrder) {
-                      // 新排序号更小，需要将中间的项目排序号+1
-                      await env.NAV_DB.prepare('UPDATE sites SET sort_order = sort_order + 1 WHERE sort_order >= ? AND sort_order < ? AND id != ? AND sort_order != 9999').bind(targetSortOrder, currentSortOrder, id).run();
-                  } else {
-                      // 新排序号更大，需要将中间的项目排序号-1
-                      await env.NAV_DB.prepare('UPDATE sites SET sort_order = sort_order - 1 WHERE sort_order > ? AND sort_order <= ? AND id != ? AND sort_order != 9999').bind(currentSortOrder, targetSortOrder, id).run();
-                  }
-              }
+              //- [新增] 从请求体中获取 sort_order
+              const { name, url, logo, desc, catelog, sort_order } = config;
+              const sanitizedName = (name || '').trim();
+              const sanitizedUrl = (url || '').trim();
+              const sanitizedCatelog = (catelog || '').trim();
+              const sanitizedLogo = (logo || '').trim() || null;
+              const sanitizedDesc = (desc || '').trim() || null;
+              const sortOrderValue = normalizeSortOrder(sort_order);
   
+            if (!sanitizedName || !sanitizedUrl || !sanitizedCatelog) {
+              return this.errorResponse('Name, URL and Catelog are required', 400);
+            }
+            //- [优化] UPDATE 语句增加了 sort_order 字段
             const update = await env.NAV_DB.prepare(`
                 UPDATE sites
-                SET name = ?, url = ?, desc = ?, logo = ?, catelog = ?, sort_order = ?, update_time = CURRENT_TIMESTAMP
+                SET name = ?, url = ?, logo = ?, desc = ?, catelog = ?, sort_order = ?, update_time = CURRENT_TIMESTAMP
                 WHERE id = ?
-            `).bind(name, url, desc, logo, catelog, targetSortOrder, id).run();
+            `).bind(sanitizedName, sanitizedUrl, sanitizedLogo, sanitizedDesc, sanitizedCatelog, sortOrderValue, id).run();
             return new Response(JSON.stringify({
                 code: 200,
                 message: 'Config updated successfully',
@@ -368,15 +517,6 @@ function renderSiteCard(site) {
       async deleteConfig(request, env, ctx, id) {
           try{
               const del = await env.NAV_DB.prepare('DELETE FROM sites WHERE id = ?').bind(id).run();
-              // 删除后自动重新排序
-              const { results } = await env.NAV_DB.prepare('SELECT id FROM sites ORDER BY sort_order ASC, create_time DESC').all();
-              let updates = [];
-              for (let i = 0; i < results.length; i++) {
-                  updates.push(env.NAV_DB.prepare('UPDATE sites SET sort_order = ? WHERE id = ?').bind(i + 1, results[i].id));
-              }
-              if (updates.length > 0) {
-                  await env.NAV_DB.batch(updates);
-              }
               return new Response(JSON.stringify({
                   code: 200,
                   message: 'Config deleted successfully',
@@ -412,12 +552,18 @@ function renderSiteCard(site) {
             }), { headers: {'Content-Type': 'application/json'} });
           }
 
-          const insertStatements = sitesToImport.map(item =>
-                env.NAV_DB.prepare(`
-                        INSERT INTO sites (name, url, desc, catelog, sort_order)
-                        VALUES (?, ?, ?, ?, ?)
-                  `).bind(item.name || null, item.url || null, item.desc || null, item.catelog || null, item.sort_order || 9999)
-            )
+          const insertStatements = sitesToImport.map(item => {
+                const sanitizedName = (item.name || '').trim() || null;
+                const sanitizedUrl = (item.url || '').trim() || null;
+                const sanitizedLogo = (item.logo || '').trim() || null;
+                const sanitizedDesc = (item.desc || '').trim() || null;
+                const sanitizedCatelog = (item.catelog || '').trim() || null;
+                const sortOrderValue = normalizeSortOrder(item.sort_order);
+                return env.NAV_DB.prepare(`
+                        INSERT INTO sites (name, url, logo, desc, catelog, sort_order)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                  `).bind(sanitizedName, sanitizedUrl, sanitizedLogo, sanitizedDesc, sanitizedCatelog, sortOrderValue);
+            })
   
           // 使用 D1 的 batch 操作，效率更高
           await env.NAV_DB.batch(insertStatements);
@@ -439,7 +585,7 @@ async exportConfig(request, env, ctx) {
           // [优化] 导出的数据将不再被包裹在 {code, data} 对象中
           const { results } = await env.NAV_DB.prepare('SELECT * FROM sites ORDER BY sort_order ASC, create_time DESC').all();
           
-          // JSON.stringify 的第二和第三个参数用于"美化"输出的JSON，
+          // JSON.stringify 的第二和第三个参数用于“美化”输出的JSON，
           // null 表示不替换任何值，2 表示使用2个空格进行缩进。
           // 这使得导出的文件非常易于阅读和手动编辑。
           const pureJsonData = JSON.stringify(results, null, 2); 
@@ -454,6 +600,91 @@ async exportConfig(request, env, ctx) {
         } catch(e) {
           return this.errorResponse(`Failed to export config: ${e.message}`, 500)
         }
+      },
+      async getCategories(request, env, ctx) {
+          try {
+              const categoryOrderMap = new Map();
+              try {
+                  const { results: orderRows } = await env.NAV_DB.prepare('SELECT catelog, sort_order FROM category_orders').all();
+                  orderRows.forEach(row => {
+                      categoryOrderMap.set(row.catelog, normalizeSortOrder(row.sort_order));
+                  });
+              } catch (error) {
+                  if (!/no such table/i.test(error.message || '')) {
+                      throw error;
+                  }
+              }
+
+              const { results } = await env.NAV_DB.prepare(`
+                SELECT catelog, COUNT(*) AS site_count, MIN(sort_order) AS min_site_sort
+                FROM sites
+                GROUP BY catelog
+              `).all();
+
+              const data = results.map(row => ({
+                  catelog: row.catelog,
+                  site_count: row.site_count,
+                  sort_order: categoryOrderMap.has(row.catelog)
+                    ? categoryOrderMap.get(row.catelog)
+                    : normalizeSortOrder(row.min_site_sort),
+                  explicit: categoryOrderMap.has(row.catelog),
+                  min_site_sort: row.min_site_sort === null ? 9999 : normalizeSortOrder(row.min_site_sort)
+              }));
+
+              data.sort((a, b) => {
+                  if (a.sort_order !== b.sort_order) {
+                      return a.sort_order - b.sort_order;
+                  }
+                  if (a.min_site_sort !== b.min_site_sort) {
+                      return a.min_site_sort - b.min_site_sort;
+                  }
+                  return a.catelog.localeCompare(b.catelog, 'zh-Hans-CN', { sensitivity: 'base' });
+              });
+
+              return new Response(JSON.stringify({
+                  code: 200,
+                  data
+              }), { headers: { 'Content-Type': 'application/json' } });
+          } catch (e) {
+              return this.errorResponse(`Failed to fetch categories: ${e.message}`, 500);
+          }
+      },
+      async updateCategoryOrder(request, env, ctx, categoryName) {
+          try {
+              const body = await request.json();
+              if (!categoryName) {
+                  return this.errorResponse('Category name is required', 400);
+              }
+
+              const normalizedCategory = categoryName.trim();
+              if (!normalizedCategory) {
+                  return this.errorResponse('Category name is required', 400);
+              }
+
+              if (body && body.reset) {
+                  await env.NAV_DB.prepare('DELETE FROM category_orders WHERE catelog = ?')
+                      .bind(normalizedCategory)
+                      .run();
+                  return new Response(JSON.stringify({
+                      code: 200,
+                      message: 'Category order reset successfully'
+                  }), { headers: { 'Content-Type': 'application/json' } });
+              }
+
+              const sortOrderValue = normalizeSortOrder(body ? body.sort_order : undefined);
+              await env.NAV_DB.prepare(`
+                INSERT INTO category_orders (catelog, sort_order)
+                VALUES (?, ?)
+                ON CONFLICT(catelog) DO UPDATE SET sort_order = excluded.sort_order
+              `).bind(normalizedCategory, sortOrderValue).run();
+
+              return new Response(JSON.stringify({
+                  code: 200,
+                  message: 'Category order updated successfully'
+              }), { headers: { 'Content-Type': 'application/json' } });
+          } catch (e) {
+              return this.errorResponse(`Failed to update category order: ${e.message}`, 500);
+          }
       },
        errorResponse(message, status) {
           return new Response(JSON.stringify({code: status, message: message}), {
@@ -471,25 +702,58 @@ async exportConfig(request, env, ctx) {
   async handleRequest(request, env, ctx) {
     const url = new URL(request.url);
 
-    if (url.pathname === '/admin') {
-      const params = url.searchParams;
-      const name = params.get('name');
-      const password = params.get('password');
-
-          // 从KV中获取凭据
-    const storedUsername = await env.NAV_AUTH.get("admin_username");
-    const storedPassword = await env.NAV_AUTH.get("admin_password");
-
-    if (name === storedUsername && password === storedPassword) {
-      return this.renderAdminPage();
-    } else if (name || password) {
-      return new Response('未授权访问', {
-        status: 403,
-        headers: { 'Content-Type': 'text/html; charset=utf-8' }
+    if (url.pathname === '/admin/logout') {
+      if (request.method !== 'POST') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+      const { token } = await validateAdminSession(request, env);
+      if (token) {
+        await destroyAdminSession(env, token);
+      }
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: '/admin',
+          'Set-Cookie': buildSessionCookie('', { maxAge: 0 }),
+        },
       });
-    } else {
-      return this.renderLoginPage();
     }
+
+    if (url.pathname === '/admin') {
+      if (request.method === 'POST') {
+        const formData = await request.formData();
+        const name = (formData.get('name') || '').trim();
+        const password = (formData.get('password') || '').trim();
+
+        const storedUsername = await env.NAV_AUTH.get('admin_username');
+        const storedPassword = await env.NAV_AUTH.get('admin_password');
+
+        const isValid =
+          storedUsername &&
+          storedPassword &&
+          name === storedUsername &&
+          password === storedPassword;
+
+        if (isValid) {
+          const token = await createAdminSession(env);
+          return new Response(null, {
+            status: 302,
+            headers: {
+              Location: '/admin',
+              'Set-Cookie': buildSessionCookie(token),
+            },
+          });
+        }
+
+        return this.renderLoginPage('账号或密码错误，请重试。');
+      }
+
+      const session = await validateAdminSession(request, env);
+      if (session.authenticated) {
+        return this.renderAdminPage();
+      }
+
+      return this.renderLoginPage();
     }
     
     if (url.pathname.startsWith('/static')) {
@@ -529,185 +793,18 @@ async exportConfig(request, env, ctx) {
       <title>书签管理页面</title>
       <link rel="stylesheet" href="/static/admin.css">
       <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap" rel="stylesheet">
-      <style>
-        body {
-          min-height: 100vh;
-          background: linear-gradient(120deg, #f8fafc 0%, #e3f0ff 100%);
-        }
-        .container {
-          background: rgba(255,255,255,0.85);
-          box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.10);
-          border-radius: 2rem;
-          backdrop-filter: blur(12px) saturate(1.2);
-          -webkit-backdrop-filter: blur(12px) saturate(1.2);
-          margin-top: 40px;
-          margin-bottom: 40px;
-        }
-        h1 {
-          background: linear-gradient(90deg, #6c63ff 0%, #4cc9f0 100%);
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
-          background-clip: text;
-          color: transparent;
-          font-size: 2.2rem;
-          font-weight: 700;
-          margin-bottom: 2rem;
-        }
-        .tab-buttons .tab-button.active {
-          background: linear-gradient(90deg, #e3f0ff 0%, #f8fafc 100%);
-          color: #6c63ff;
-          font-weight: bold;
-        }
-        .tab-button {
-          border-radius: 1.2rem 1.2rem 0 0;
-          margin-right: 8px;
-          font-size: 1rem;
-        }
-        .add-new > input, .add-new > button {
-          border-radius: 1.2rem;
-        }
-        .add-new > button {
-          background: linear-gradient(90deg, #6c63ff 0%, #4cc9f0 100%);
-          color: #fff;
-          font-weight: 600;
-          box-shadow: 0 2px 8px rgba(76,201,240,0.10);
-        }
-        .add-new > button:hover {
-          background: linear-gradient(90deg, #4cc9f0 0%, #6c63ff 100%);
-        }
-        .import-export button {
-          border-radius: 1.2rem;
-          background: #f0f4fa;
-          color: #6c63ff;
-          font-weight: 600;
-          border: 1px solid #e3e3e3;
-        }
-        .import-export button:hover {
-          background: #e3f0ff;
-        }
-        .table-wrapper {
-          background: rgba(255,255,255,0.7);
-          border-radius: 1.2rem;
-          box-shadow: 0 2px 8px rgba(76,201,240,0.06);
-          padding: 1rem 0.5rem;
-        }
-        table {
-          background: transparent;
-          border-radius: 1.2rem;
-          table-layout: fixed;
-          width: 100%;
-        }
-        th, td {
-          border: none;
-          border-bottom: 1px solid #f0f0f0;
-          padding: 12px 10px;
-          word-break: break-all;
-        }
-        th {
-          background: #f8fafc;
-          color: #6c63ff;
-          font-weight: 700;
-        }
-        td.url-cell {
-          max-width: 180px;
-          min-width: 120px;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        td.sort-cell {
-          max-width: 60px;
-          min-width: 40px;
-          text-align: center;
-          white-space: nowrap;
-        }
-        td.logo-cell {
-          max-width: 60px;
-          min-width: 40px;
-          text-align: center;
-          white-space: nowrap;
-        }
-        td.name-cell, td.desc-cell, td.catelog-cell {
-          max-width: 120px;
-          min-width: 80px;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        tr:last-child td {
-          border-bottom: none;
-        }
-        tr {
-          transition: background 0.2s;
-        }
-        tr:hover {
-          background: #f0f4fa;
-        }
-        .actions button, .pagination button {
-          border-radius: 1.2rem;
-          font-size: 0.95rem;
-          /* [优化] 添加硬件加速，减少重绘 */
-          transform: translateZ(0);
-          will-change: transform;
-        }
-        .edit-btn {
-          background: #4cc9f0;
-        }
-        .edit-btn:hover {
-          background: #6c63ff;
-        }
-        .del-btn {
-          background: #ff6b81;
-        }
-        .del-btn:hover {
-          background: #e63946;
-        }
-        .pagination button {
-          background: #f0f4fa;
-          color: #6c63ff;
-          border: 1px solid #e3e3e3;
-        }
-        .pagination button:hover {
-          background: #e3f0ff;
-        }
-        /* [优化] 添加按钮点击反馈 */
-        .pagination button:active {
-          transform: translateZ(0) scale(0.98);
-        }
-        /* [优化] 表格行优化 */
-        tr {
-          transition: background 0.2s;
-          /* [优化] 减少重绘 */
-          will-change: background-color;
-        }
-        tr:hover {
-          background: #f0f4fa;
-        }
-        #message.success {
-          background: #d1fae5;
-          color: #065f46;
-        }
-        #message.error {
-          background: #fee2e2;
-          color: #991b1b;
-        }
-        @media (max-width: 700px) {
-          .container {
-            border-radius: 0.7rem;
-            margin-top: 10px;
-            margin-bottom: 10px;
-            padding: 8px;
-          }
-          .table-wrapper {
-            border-radius: 0.7rem;
-            padding: 0.3rem 0.1rem;
-          }
-        }
-      </style>
     </head>
     <body>
       <div class="container">
-          <h1>书签管理</h1>
+          <header class="admin-header">
+            <div>
+              <h1>书签管理</h1>
+              <p class="admin-subtitle">管理后台仅限受信任的管理员使用，请妥善保管账号</p>
+            </div>
+            <form method="post" action="/admin/logout">
+              <button type="submit" class="logout-btn">退出登录</button>
+            </form>
+          </header>
       
           <div class="import-export">
             <input type="file" id="importFile" accept=".json" style="display:none;">
@@ -719,8 +816,8 @@ async exportConfig(request, env, ctx) {
           <div class="add-new">
             <input type="text" id="addName" placeholder="Name" required>
             <input type="text" id="addUrl" placeholder="URL" required>
+            <input type="text" id="addLogo" placeholder="Logo(optional)">
             <input type="text" id="addDesc" placeholder="Description(optional)">
-            <input type="text" id="addLogo" placeholder="Icon URL (optional)">
             <input type="text" id="addCatelog" placeholder="Catelog" required>
             <input type="number" id="addSortOrder" placeholder="排序 (数字小靠前)">
             <button id="addBtn">添加</button>
@@ -730,18 +827,20 @@ async exportConfig(request, env, ctx) {
               <div class="tab-buttons">
                  <button class="tab-button active" data-tab="config">书签列表</button>
                  <button class="tab-button" data-tab="pending">待审核列表</button>
+                 <button class="tab-button" data-tab="categories">分类排序</button>
               </div>
                <div id="config" class="tab-content active">
                     <div class="table-wrapper">
                         <table id="configTable">
                             <thead>
                                 <tr>
+                                  <th>ID</th>
                                   <th>Name</th>
                                   <th>URL</th>
+                                  <th>Logo</th>
                                   <th>Description</th>
                                   <th>Catelog</th>
-                                  <th class="sort-th">图标</th>
-                                  <th class="sort-th">排序</th>
+                                  <th>排序</th> <!-- [新增] 表格头增加排序 -->
                                   <th>Actions</th>
                                 </tr>
                             </thead>
@@ -752,8 +851,6 @@ async exportConfig(request, env, ctx) {
                         <div class="pagination">
                               <button id="prevPage" disabled>上一页</button>
                               <span id="currentPage">1</span>/<span id="totalPages">1</span>
-                              <input type="number" id="pageInput" min="1" style="width: 60px; text-align: center; margin: 0 5px;" placeholder="页码">
-                              <button id="goToPage">跳转</button>
                               <button id="nextPage" disabled>下一页</button>
                         </div>
                    </div>
@@ -763,12 +860,12 @@ async exportConfig(request, env, ctx) {
                    <table id="pendingTable">
                       <thead>
                         <tr>
+                            <th>ID</th>
                              <th>Name</th>
                              <th>URL</th>
+                            <th>Logo</th>
                             <th>Description</th>
                             <th>Catelog</th>
-                            <th class="sort-th">图标</th>
-                            <th class="sort-th">排序</th>
                             <th>Actions</th>
                         </tr>
                         </thead>
@@ -779,12 +876,31 @@ async exportConfig(request, env, ctx) {
                      <div class="pagination">
                       <button id="pendingPrevPage" disabled>上一页</button>
                        <span id="pendingCurrentPage">1</span>/<span id="pendingTotalPages">1</span>
-                       <input type="number" id="pendingPageInput" min="1" style="width: 60px; text-align: center; margin: 0 5px;" placeholder="页码">
-                       <button id="pendingGoToPage">跳转</button>
                       <button id="pendingNextPage" disabled>下一页</button>
                     </div>
-                 </div>
                </div>
+              </div>
+              <div id="categories" class="tab-content">
+                <div class="table-wrapper">
+                  <div class="category-toolbar">
+                    <p class="category-hint">设置分类排序值（数字越小越靠前），留空表示使用默认顺序。</p>
+                    <button id="refreshCategories" type="button">刷新</button>
+                  </div>
+                  <table id="categoryTable">
+                    <thead>
+                      <tr>
+                        <th>分类</th>
+                        <th>书签数量</th>
+                        <th>排序值</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody id="categoryTableBody">
+                      <tr><td colspan="4">加载中...</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
       </div>
       <script src="/static/admin.js"></script>
@@ -806,105 +922,77 @@ async exportConfig(request, env, ctx) {
         width: 100%;
         height: 100%;
         overflow: auto;
-        background-color: rgba(0, 0, 0, 0.35); /* 更柔和的半透明背景 */
-        backdrop-filter: blur(2px);
+        background-color: rgba(0, 0, 0, 0.5); /* 半透明背景 */
     }
     .modal-content {
-        background: rgba(255,255,255,0.92);
-        margin: 8% auto;
-        padding: 32px 24px 24px 24px;
-        border: none;
-        width: 95%;
-        max-width: 420px;
-        border-radius: 1.5rem;
+        background-color: #fff;
+        margin: 10% auto;
+        padding: 20px;
+        border: 1px solid #dee2e6;
+        width: 80%; /* [优化] 调整宽度以适应移动端 */
+        max-width: 600px;
+        border-radius: 8px;
         position: relative;
-        box-shadow: 0 8px 32px 0 rgba(76,201,240,0.18);
-        backdrop-filter: blur(16px) saturate(1.2);
-        -webkit-backdrop-filter: blur(16px) saturate(1.2);
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        animation: fadeInModal 0.4s cubic-bezier(.4,0,.2,1);
-    }
-    @keyframes fadeInModal {
-      from { opacity: 0; transform: translateY(-20px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-    .modal-content h2 {
-        font-size: 1.5rem;
-        font-weight: 700;
-        margin-bottom: 1.2rem;
-        background: linear-gradient(90deg, #6c63ff 0%, #4cc9f0 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        color: transparent;
-        text-align: center;
-        letter-spacing: 1px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
     }
     .modal-close {
         color: #6c757d;
         position: absolute;
-        right: 18px;
-        top: 10px;
+        right: 10px;
+        top: 0;
         font-size: 28px;
         font-weight: bold;
         cursor: pointer;
         transition: color 0.2s;
     }
+    
     .modal-close:hover,
     .modal-close:focus {
-        color: #343a40;
+        color: #343a40; /* 悬停时颜色加深 */
         text-decoration: none;
         cursor: pointer;
     }
     .modal-content form {
         display: flex;
         flex-direction: column;
-        width: 100%;
-        align-items: center;
     }
+    
     .modal-content form label {
         margin-bottom: 5px;
-        font-weight: 500;
-        color: #495057;
-        align-self: flex-start;
+        font-weight: 500; /* 字重 */
+        color: #495057; /* 标签颜色 */
     }
     .modal-content form input {
-        margin-bottom: 14px;
-        padding: 12px 16px;
-        border: none;
-        border-radius: 1.2rem;
+        margin-bottom: 10px;
+        padding: 10px;
+        border: 1px solid #ced4da; /* 输入框边框 */
+        border-radius: 4px;
         font-size: 1rem;
         outline: none;
-        background: rgba(255,255,255,0.85);
-        box-shadow: 0 2px 8px rgba(76,201,240,0.08);
-        transition: box-shadow 0.2s, border 0.2s;
-        width: 100%;
-        color: #333;
+        transition: border-color 0.2s;
     }
     .modal-content form input:focus {
-        box-shadow: 0 0 0 3px #4cc9f0aa;
-        background: #fff;
+        border-color: #80bdff; /* 焦点边框颜色 */
+        box-shadow:0 0 0 0.2rem rgba(0,123,255,.25);
+    }
+    .modal-content form input:focus {
+        border-color: #80bdff; /* 焦点边框颜色 */
+        box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25);
     }
     .modal-content button[type='submit'] {
         margin-top: 10px;
-        background: linear-gradient(90deg, #6c63ff 0%, #4cc9f0 100%);
+        background-color: #007bff; /* 提交按钮颜色 */
         color: #fff;
         border: none;
-        padding: 12px 0;
-        border-radius: 1.2rem;
+        padding: 10px 15px;
+        border-radius: 4px;
         cursor: pointer;
-        font-size: 1.1rem;
-        font-weight: 600;
-        width: 100%;
-        box-shadow: 0 2px 8px rgba(76,201,240,0.10);
-        transition: background 0.2s, transform 0.1s;
-        letter-spacing: 1px;
+        font-size: 1rem;
+        transition: background-color 0.3s;
     }
+    
     .modal-content button[type='submit']:hover {
-        background: linear-gradient(90deg, #4cc9f0 0%, #6c63ff 100%);
-        transform: translateY(-2px) scale(1.03);
+        background-color: #0056b3; /* 悬停时颜色加深 */
     }
 .container {
         max-width: 1200px;
@@ -914,10 +1002,43 @@ async exportConfig(request, env, ctx) {
         border-radius: 8px;
         box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
     }
+    .admin-header {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin-bottom: 24px;
+    }
+    @media (min-width: 768px) {
+        .admin-header {
+            flex-direction: row;
+            align-items: center;
+            justify-content: space-between;
+        }
+    }
     h1 {
-        text-align: center;
-        margin-bottom: 20px;
+        font-size: 1.75rem;
+        margin: 0;
         color: #343a40;
+    }
+    .admin-subtitle {
+        margin: 4px 0 0;
+        color: #6c757d;
+        font-size: 0.95rem;
+    }
+    .logout-btn {
+        background-color: #f8f9fa;
+        color: #495057;
+        border: 1px solid #ced4da;
+        padding: 8px 14px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.95rem;
+        transition: background-color 0.2s, color 0.2s, box-shadow 0.2s;
+    }
+    .logout-btn:hover {
+        background-color: #e9ecef;
+        color: #212529;
+        box-shadow: 0 3px 10px rgba(0,0,0,0.08);
     }
     .tab-wrapper {
         margin-top: 20px;
@@ -1039,6 +1160,56 @@ async exportConfig(request, env, ctx) {
     tr:nth-child(even) {
         background-color: #f9f9f9;
     }
+    .category-toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    .category-hint {
+        margin: 0;
+        font-size: 0.85rem;
+        color: #6c757d;
+    }
+    #refreshCategories {
+        background-color: #f8f9fa;
+        color: #495057;
+        border: 1px solid #ced4da;
+        padding: 6px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.9rem;
+        transition: background-color 0.2s;
+    }
+    #refreshCategories:hover {
+        background-color: #e9ecef;
+    }
+    .category-sort-input {
+        width: 100%;
+        padding: 6px 8px;
+        border: 1px solid #ced4da;
+        border-radius: 4px;
+    }
+    .category-sort-input:focus {
+        border-color: #80bdff;
+        box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25);
+        outline: none;
+    }
+    .category-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+    .category-actions button {
+        padding: 5px 10px;
+        font-size: 0.85rem;
+    }
+    .category-actions button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
     
     .actions {
         display: flex;
@@ -1092,24 +1263,44 @@ async exportConfig(request, env, ctx) {
             const pendingTotalPagesSpan = document.getElementById('pendingTotalPages');
           
           const messageDiv = document.getElementById('message');
+          const categoryTableBody = document.getElementById('categoryTableBody');
+          const refreshCategoriesBtn = document.getElementById('refreshCategories');
+          
+          var escapeHTML = function(value) {
+            var result = '';
+            if (value !== null && value !== undefined) {
+              result = String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+            }
+            return result;
+          };
+          
+          var normalizeUrl = function(value) {
+            var trimmed = String(value || '').trim();
+            var normalized = '';
+            if (/^https?:\\/\\//i.test(trimmed)) {
+              normalized = trimmed;
+            } else if (/^[\\w.-]+\\.[\\w.-]+/.test(trimmed)) {
+              normalized = 'https://' + trimmed;
+            }
+            return normalized;
+          };
           
           const addBtn = document.getElementById('addBtn');
           const addName = document.getElementById('addName');
           const addUrl = document.getElementById('addUrl');
-          const addDesc = document.getElementById('addDesc');
           const addLogo = document.getElementById('addLogo');
+          const addDesc = document.getElementById('addDesc');
           const addCatelog = document.getElementById('addCatelog');
 		  const addSortOrder = document.getElementById('addSortOrder'); // [新增] 获取排序输入框
           
           const importBtn = document.getElementById('importBtn');
           const importFile = document.getElementById('importFile');
           const exportBtn = document.getElementById('exportBtn');
-          
-          // [新增] 获取分页相关元素
-          const pageInput = document.getElementById('pageInput');
-          const goToPageBtn = document.getElementById('goToPage');
-          const pendingPageInput = document.getElementById('pendingPageInput');
-          const pendingGoToPageBtn = document.getElementById('pendingGoToPage');
           
            const tabButtons = document.querySelectorAll('.tab-button');
             const tabContents = document.querySelectorAll('.tab-content');
@@ -1125,9 +1316,18 @@ async exportConfig(request, env, ctx) {
                        content.classList.add('active');
                      }
                   })
-              });
+                if (tab === 'categories') {
+                  fetchCategories();
+                }
             });
-          
+          });
+
+          if (refreshCategoriesBtn) {
+            refreshCategoriesBtn.addEventListener('click', () => {
+              fetchCategories();
+            });
+          }
+
           
           // 添加搜索框
           const searchInput = document.createElement('input');
@@ -1148,6 +1348,7 @@ async exportConfig(request, env, ctx) {
             let pendingPageSize = 10;
             let pendingTotalItems = 0;
             let allPendingConfigs = []; // 保存所有待审核配置数据
+          let categoriesData = []; // 保存分类排序数据
           
           // 创建编辑模态框
           const editModal = document.createElement('div');
@@ -1163,14 +1364,14 @@ async exportConfig(request, env, ctx) {
                 <input type="text" id="editName" required><br>
                 <label for="editUrl">URL:</label>
                 <input type="text" id="editUrl" required><br>
+                <label for="editLogo">Logo(可选):</label>
+                <input type="text" id="editLogo"><br>
                 <label for="editDesc">描述(可选):</label>
                 <input type="text" id="editDesc"><br>
-                <label for="editLogo">图标 URL(可选):</label>
-                <input type="text" id="editLogo"><br>
                 <label for="editCatelog">分类:</label>
                 <input type="text" id="editCatelog" required><br>
-			    <label for="editSortOrder">排序:</label>
-                <input type="number" id="editSortOrder"><br>
+			    <label for="editSortOrder">排序:</label> <!-- [新增] -->
+                <input type="number" id="editSortOrder"><br> <!-- [新增] -->
                 <button type="submit">保存</button>
               </form>
             </div>
@@ -1188,23 +1389,26 @@ async exportConfig(request, env, ctx) {
             const id = document.getElementById('editId').value;
             const name = document.getElementById('editName').value;
             const url = document.getElementById('editUrl').value;
-            const desc = document.getElementById('editDesc').value;
             const logo = document.getElementById('editLogo').value;
+            const desc = document.getElementById('editDesc').value;
             const catelog = document.getElementById('editCatelog').value;
-                const sort_order = document.getElementById('editSortOrder').value;
+                const sort_order = document.getElementById('editSortOrder').value; // [新增]
+            const payload = {
+                name: name.trim(),
+                url: url.trim(),
+                logo: logo.trim(),
+                desc: desc.trim(),
+                catelog: catelog.trim()
+            };
+            if (sort_order !== '') {
+                payload.sort_order = Number(sort_order);
+            }
             fetch(\`/api/config/\${id}\`, {
               method: 'PUT',
               headers: {
                 'Content-Type': 'application/json'
               },
-              body: JSON.stringify({
-                name,
-                url,
-                desc,
-                logo,
-                catelog,
-				sort_order
-              })
+              body: JSON.stringify(payload)
             }).then(res => res.json())
               .then(data => {
                 if (data.code === 200) {
@@ -1225,22 +1429,15 @@ async exportConfig(request, env, ctx) {
               if(keyword) {
                   url = \`/api/config?page=\${page}&pageSize=\${pageSize}&keyword=\${keyword}\`
               }
-              
-              configTableBody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 20px;">加载中...</td></tr>';
-              
               fetch(url)
                   .then(res => res.json())
                   .then(data => {
                       if (data.code === 200) {
                           totalItems = data.total;
                           currentPage = data.page;
-                          const totalPages = Math.ceil(totalItems / pageSize);
-                          
-                          // [优化] 批量更新DOM，减少重绘
-                          totalPagesSpan.innerText = totalPages;
+                                                 totalPagesSpan.innerText = Math.ceil(totalItems / pageSize);
                           currentPageSpan.innerText = currentPage;
-                          allConfigs = data.data;
-                          
+                          allConfigs = data.data; // 保存所有数据
                           renderConfig(allConfigs);
                           updatePaginationButtons();
                       } else {
@@ -1251,83 +1448,243 @@ async exportConfig(request, env, ctx) {
               })
           }
           function renderConfig(configs) {
-          const fragment = document.createDocumentFragment();
-          
+          configTableBody.innerHTML = '';
            if (configs.length === 0) {
-                const row = document.createElement('tr');
-                row.innerHTML = '<td colspan="7">没有配置数据</td>';
-                fragment.appendChild(row);
-            } else {
-                configs.forEach(config => {
-                    const row = document.createElement('tr');
-                    row.innerHTML = \`
-                        <td class="name-cell">\${config.name}</td>
-                        <td class="url-cell"><a href="\${config.url}" target="_blank">\${config.url}</a></td>
-                        <td class="desc-cell">\${config.desc || 'N/A'}</td>
-                        <td class="catelog-cell">\${config.catelog}</td>
-                        <td class="logo-cell">
-                          \${config.logo ? \`<img src="\${config.logo}" alt="logo" style="width:32px;height:32px;object-fit:contain;" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%23666%22><text x=%2250%%22 y=%2250%%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 font-size=%2212%22>\${config.name.charAt(0).toUpperCase()}</text></svg>'"/>\` : '<span style="color:#999;font-size:12px;">无</span>'}
-                        </td>
-                        <td class="sort-cell">\${config.sort_order === 9999 ? '默认' : config.sort_order}</td>
-                        <td class="actions">
-                          <button class="edit-btn" data-id="\${config.id}">编辑</button>
-                          <button class="del-btn" data-id="\${config.id}">删除</button>
-                        </td>
-                     \`;
-                    fragment.appendChild(row);
-                });
+                configTableBody.innerHTML = '<tr><td colspan="7">没有配置数据</td></tr>';
+                return
             }
-            
-            configTableBody.innerHTML = '';
-            configTableBody.appendChild(fragment);
+          configs.forEach(config => {
+              const row = document.createElement('tr');
+              const safeName = escapeHTML(config.name || '');
+              const normalizedUrl = normalizeUrl(config.url);
+              const displayUrl = config.url ? escapeHTML(config.url) : '未提供';
+              const urlCell = normalizedUrl
+                ? \`<a href="\${escapeHTML(normalizedUrl)}" target="_blank" rel="noopener noreferrer">\${escapeHTML(normalizedUrl)}</a>\`
+                : displayUrl;
+              const normalizedLogo = normalizeUrl(config.logo);
+              const logoCell = normalizedLogo
+                ? \`<img src="\${escapeHTML(normalizedLogo)}" alt="\${safeName}" style="width:30px;" />\`
+                : 'N/A';
+              const descCell = config.desc ? escapeHTML(config.desc) : 'N/A';
+              const catelogCell = escapeHTML(config.catelog || '');
+              const sortValue = config.sort_order === 9999 || config.sort_order === null || config.sort_order === undefined
+                ? '默认'
+                : escapeHTML(config.sort_order);
+               row.innerHTML = \`
+                 <td>\${config.id}</td>
+                  <td>\${safeName}</td>
+                  <td>\${urlCell}</td>
+                  <td>\${logoCell}</td>
+                  <td>\${descCell}</td>
+                  <td>\${catelogCell}</td>
+				 <td>\${sortValue}</td> <!-- [新增] 显示排序值 -->
+                  <td class="actions">
+                    <button class="edit-btn" data-id="\${config.id}">编辑</button>
+                    <button class="del-btn" data-id="\${config.id}">删除</button>
+                  </td>
+               \`;
+              configTableBody.appendChild(row);
+          });
             bindActionEvents();
           }
           
           function bindActionEvents() {
-           // [修复] 使用事件委托，并确保只绑定一次事件监听器
-           // 先移除可能存在的旧事件监听器
-           configTableBody.removeEventListener('click', handleTableClick);
-           // 重新绑定事件监听器
-           configTableBody.addEventListener('click', handleTableClick);
-          }
+           document.querySelectorAll('.edit-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const id = this.dataset.id;
+                    handleEdit(id);
+                })
+           });
           
-          // [新增] 将事件处理函数提取出来，便于移除和重新绑定
-          function handleTableClick(e) {
-               if (e.target.classList.contains('edit-btn')) {
-                   const id = e.target.dataset.id;
-                   handleEdit(id);
-               } else if (e.target.classList.contains('del-btn')) {
-                   const id = e.target.dataset.id;
-                   handleDelete(id);
-               }
-          }
-          
-    // [优化] 点击编辑时，直接使用当前数据，避免重复API调用
-          function handleEdit(id) {
-            const configToEdit = allConfigs.find(c => c.id == id);
-            if (!configToEdit) {
-                showMessage('找不到要编辑的数据', 'error');
-                return;
+          document.querySelectorAll('.del-btn').forEach(btn => {
+               btn.addEventListener('click', function() {
+                  const id = this.dataset.id;
+                   handleDelete(id)
+               })
+          })
+         }
+
+          function fetchCategories() {
+            if (!categoryTableBody) {
+              return;
             }
-            
-            // [优化] 直接填充表单，避免DOM查询
-            const editId = document.getElementById('editId');
-            const editName = document.getElementById('editName');
-            const editUrl = document.getElementById('editUrl');
-            const editDesc = document.getElementById('editDesc');
-            const editLogo = document.getElementById('editLogo');
-            const editCatelog = document.getElementById('editCatelog');
-            const editSortOrder = document.getElementById('editSortOrder');
-            
-            editId.value = configToEdit.id;
-            editName.value = configToEdit.name;
-            editUrl.value = configToEdit.url;
-            editDesc.value = configToEdit.desc || '';
-            editLogo.value = configToEdit.logo || '';
-            editCatelog.value = configToEdit.catelog;
-            editSortOrder.value = configToEdit.sort_order === 9999 ? '' : configToEdit.sort_order;
-            
-            editModal.style.display = 'block';
+            categoryTableBody.innerHTML = '<tr><td colspan="4">加载中...</td></tr>';
+            fetch('/api/categories')
+              .then(res => res.json())
+              .then(data => {
+                if (data.code === 200) {
+                  categoriesData = data.data || [];
+                  renderCategories(categoriesData);
+                } else {
+                  showMessage(data.message || '加载分类失败', 'error');
+                  categoryTableBody.innerHTML = '<tr><td colspan="4">加载失败</td></tr>';
+                }
+              }).catch(() => {
+                showMessage('网络错误', 'error');
+                categoryTableBody.innerHTML = '<tr><td colspan="4">加载失败</td></tr>';
+              });
+          }
+
+          function renderCategories(categories) {
+            if (!categoryTableBody) {
+              return;
+            }
+            categoryTableBody.innerHTML = '';
+            if (!categories || categories.length === 0) {
+              categoryTableBody.innerHTML = '<tr><td colspan="4">暂无分类数据</td></tr>';
+              return;
+            }
+
+            categories.forEach(item => {
+              const row = document.createElement('tr');
+
+              const nameCell = document.createElement('td');
+              nameCell.textContent = item.catelog;
+              row.appendChild(nameCell);
+
+              const countCell = document.createElement('td');
+              countCell.textContent = item.site_count;
+              row.appendChild(countCell);
+
+              const sortCell = document.createElement('td');
+              const input = document.createElement('input');
+              input.type = 'number';
+              input.className = 'category-sort-input';
+              if (item.explicit) {
+                input.value = item.sort_order;
+              } else {
+                input.placeholder = item.sort_order;
+              }
+              input.setAttribute('data-category', item.catelog);
+              sortCell.appendChild(input);
+
+              const hint = document.createElement('small');
+              hint.textContent = '当前默认值：' + item.sort_order;
+              hint.style.display = 'block';
+              hint.style.marginTop = '4px';
+              hint.style.fontSize = '0.75rem';
+              hint.style.color = '#6c757d';
+              sortCell.appendChild(hint);
+              row.appendChild(sortCell);
+
+              const actionCell = document.createElement('td');
+              actionCell.className = 'category-actions';
+
+              const saveBtn = document.createElement('button');
+              saveBtn.className = 'category-save-btn';
+              saveBtn.textContent = '保存';
+              saveBtn.setAttribute('data-category', item.catelog);
+              actionCell.appendChild(saveBtn);
+
+              const resetBtn = document.createElement('button');
+              resetBtn.className = 'category-reset-btn';
+              resetBtn.textContent = '重置';
+              resetBtn.setAttribute('data-category', item.catelog);
+              if (!item.explicit) {
+                resetBtn.disabled = true;
+              }
+              actionCell.appendChild(resetBtn);
+
+              row.appendChild(actionCell);
+              categoryTableBody.appendChild(row);
+            });
+
+            bindCategoryEvents();
+          }
+
+          function bindCategoryEvents() {
+            if (!categoryTableBody) {
+              return;
+            }
+            categoryTableBody.querySelectorAll('.category-save-btn').forEach(btn => {
+              btn.addEventListener('click', function() {
+                const category = this.getAttribute('data-category');
+                const input = this.closest('tr').querySelector('.category-sort-input');
+                if (!category || !input) {
+                  return;
+                }
+                const rawValue = input.value.trim();
+                if (rawValue === '') {
+                  showMessage('请输入排序值，或使用“重置”恢复默认。', 'error');
+                  return;
+                }
+                const sortValue = Number(rawValue);
+                if (!Number.isFinite(sortValue)) {
+                  showMessage('排序值必须为数字', 'error');
+                  return;
+                }
+                fetch('/api/categories/' + encodeURIComponent(category), {
+                  method: 'PUT',
+                  headers: {
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ sort_order: sortValue })
+                }).then(res => res.json())
+                  .then(data => {
+                    if (data.code === 200) {
+                      showMessage('分类排序已更新', 'success');
+                      fetchCategories();
+                    } else {
+                      showMessage(data.message || '更新失败', 'error');
+                    }
+                  }).catch(() => {
+                    showMessage('网络错误', 'error');
+                  });
+              });
+            });
+
+            categoryTableBody.querySelectorAll('.category-reset-btn').forEach(btn => {
+              btn.addEventListener('click', function() {
+                if (this.disabled) {
+                  return;
+                }
+                const category = this.getAttribute('data-category');
+                if (!category) {
+                  return;
+                }
+                if (!confirm('确定恢复该分类的默认排序吗？')) {
+                  return;
+                }
+                fetch('/api/categories/' + encodeURIComponent(category), {
+                  method: 'PUT',
+                  headers: {
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ reset: true })
+                }).then(res => res.json())
+                  .then(data => {
+                    if (data.code === 200) {
+                      showMessage('已重置分类排序', 'success');
+                      fetchCategories();
+                    } else {
+                      showMessage(data.message || '重置失败', 'error');
+                    }
+                  }).catch(() => {
+                    showMessage('网络错误', 'error');
+                  });
+              });
+            });
+          }
+
+    // [优化] 点击编辑时，获取并填充排序字段
+          function handleEdit(id) {
+            fetch(\`/api/config?page=1&pageSize=1000\`) // A simple way to get all configs to find the one to edit
+            .then(res => res.json())
+            .then(data => {
+                const configToEdit = data.data.find(c => c.id == id);
+                if (!configToEdit) {
+                    showMessage('找不到要编辑的数据', 'error');
+                    return;
+                }
+                document.getElementById('editId').value = configToEdit.id;
+                document.getElementById('editName').value = configToEdit.name;
+                document.getElementById('editUrl').value = configToEdit.url;
+                document.getElementById('editLogo').value = configToEdit.logo || '';
+                document.getElementById('editDesc').value = configToEdit.desc || '';
+                document.getElementById('editCatelog').value = configToEdit.catelog;
+                document.getElementById('editSortOrder').value = configToEdit.sort_order === 9999 ? '' : configToEdit.sort_order; // [新增]
+                editModal.style.display = 'block';
+            });
           }
           function handleDelete(id) {
             if(!confirm('确认删除？')) return;
@@ -1370,56 +1727,40 @@ async exportConfig(request, env, ctx) {
             }
           });
           
-          // [新增] 跳转到指定页面
-          goToPageBtn.addEventListener('click', () => {
-            const targetPage = parseInt(pageInput.value);
-            const maxPage = Math.ceil(totalItems / pageSize);
-            if (targetPage && targetPage >= 1 && targetPage <= maxPage) {
-              fetchConfigs(targetPage);
-              pageInput.value = ''; // 清空输入框
-            } else {
-              showMessage('请输入有效的页码', 'error');
-            }
-          });
-          
-          // [新增] 回车键跳转
-          pageInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-              goToPageBtn.click();
-            }
-          });
-          
           addBtn.addEventListener('click', () => {
             const name = addName.value;
             const url = addUrl.value;
-            const desc = addDesc.value;
             const logo = addLogo.value;
+            const desc = addDesc.value;
              const catelog = addCatelog.value;
           const sort_order = addSortOrder.value; // [新增]			 
             if(!name ||    !url || !catelog) {
               showMessage('名称,URL,分类 必填', 'error');
               return;
           }
+          const payload = {
+             name: name.trim(),
+             url: url.trim(),
+             logo: logo.trim(),
+             desc: desc.trim(),
+             catelog: catelog.trim()
+          };
+          if (sort_order !== '') {
+             payload.sort_order = Number(sort_order);
+          }
           fetch('/api/config', {        method: 'POST',
           headers: {
               'Content-Type': 'application/json'
           },
-          body: JSON.stringify({
-             name,
-             url,
-             desc,
-             logo,
-              catelog,
-              sort_order
-          })
+          body: JSON.stringify(payload)
           }).then(res => res.json())
           .then(data => {
              if(data.code === 201) {
                  showMessage('添加成功', 'success');
                 addName.value = '';
                 addUrl.value = '';
-                addDesc.value = '';
                 addLogo.value = '';
+                addDesc.value = '';
                  addCatelog.value = '';
         addSortOrder.value = ''; // [新增]				 
                  fetchConfigs();
@@ -1492,18 +1833,13 @@ async exportConfig(request, env, ctx) {
           
           
           function fetchPendingConfigs(page = pendingCurrentPage) {
-                  pendingTableBody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 20px;">加载中...</td></tr>';
-                  
                   fetch(\`/api/pending?page=\${page}&pageSize=\${pendingPageSize}\`)
                       .then(res => res.json())
                       .then(data => {
                         if (data.code === 200) {
                                pendingTotalItems = data.total;
                                pendingCurrentPage = data.page;
-                               const pendingTotalPages = Math.ceil(pendingTotalItems/ pendingPageSize);
-                               
-                               // [优化] 批量更新DOM
-                               pendingTotalPagesSpan.innerText = pendingTotalPages;
+                               pendingTotalPagesSpan.innerText = Math.ceil(pendingTotalItems/ pendingPageSize);
                                 pendingCurrentPageSpan.innerText = pendingCurrentPage;
                                allPendingConfigs = data.data;
                                  renderPendingConfig(allPendingConfigs);
@@ -1517,55 +1853,55 @@ async exportConfig(request, env, ctx) {
           }
           
             function renderPendingConfig(configs) {
-                  const fragment = document.createDocumentFragment();
-                  
-                  if(configs.length === 0) {
-                      const row = document.createElement('tr');
-                      row.innerHTML = '<td colspan="8">没有待审核数据</td>';
-                      fragment.appendChild(row);
-                  } else {
-                    configs.forEach(config => {
-                        const row = document.createElement('tr');
-                        row.innerHTML = \`
-                          <td class="name-cell">\${config.name}</td>
-                           <td class="url-cell"><a href="\${config.url}" target="_blank">\${config.url}</a></td>
-                           <td class="desc-cell">\${config.desc || 'N/A'}</td>
-                           <td class="catelog-cell">\${config.catelog}</td>
-                           <td class="logo-cell">
-                             \${config.logo ? \`<img src="\${config.logo}" alt="logo" style="width:32px;height:32px;object-fit:contain;" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%23666%22><text x=%2250%%22 y=%2250%%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 font-size=%2212%22>\${config.name.charAt(0).toUpperCase()}</text></svg>'"/>\` : '<span style="color:#999;font-size:12px;">无</span>'}
-                           </td>
-                            <td class="sort-cell">\${config.sort_order === 9999 ? '默认' : config.sort_order}</td>
-                            <td class="actions">
-                                <button class="approve-btn" data-id="\${config.id}">批准</button>
-                              <button class="reject-btn" data-id="\${config.id}">拒绝</button>
-                            </td>
-                          \`;
-                        fragment.appendChild(row);
-                    });
-                  }
-                  
                   pendingTableBody.innerHTML = '';
-                  pendingTableBody.appendChild(fragment);
-                  bindPendingActionEvents();
+                  if(configs.length === 0) {
+                      pendingTableBody.innerHTML = '<tr><td colspan="7">没有待审核数据</td></tr>';
+                      return
+                  }
+                configs.forEach(config => {
+                    const row = document.createElement('tr');
+                    const safeName = escapeHTML(config.name || '');
+                    const normalizedUrl = normalizeUrl(config.url);
+                    const urlCell = normalizedUrl
+                      ? \`<a href="\${escapeHTML(normalizedUrl)}" target="_blank" rel="noopener noreferrer">\${escapeHTML(normalizedUrl)}</a>\`
+                      : (config.url ? escapeHTML(config.url) : '未提供');
+                    const normalizedLogo = normalizeUrl(config.logo);
+                    const logoCell = normalizedLogo
+                      ? \`<img src="\${escapeHTML(normalizedLogo)}" alt="\${safeName}" style="width:30px;" />\`
+                      : 'N/A';
+                    const descCell = config.desc ? escapeHTML(config.desc) : 'N/A';
+                    const catelogCell = escapeHTML(config.catelog || '');
+                    row.innerHTML = \`
+                      <td>\${config.id}</td>
+                       <td>\${safeName}</td>
+                       <td>\${urlCell}</td>
+                       <td>\${logoCell}</td>
+                       <td>\${descCell}</td>
+                       <td>\${catelogCell}</td>
+                        <td class="actions">
+                            <button class="approve-btn" data-id="\${config.id}">批准</button>
+                          <button class="reject-btn" data-id="\${config.id}">拒绝</button>
+                        </td>
+                      \`;
+                    pendingTableBody.appendChild(row);
+                });
+                bindPendingActionEvents();
             }
            function bindPendingActionEvents() {
-               // [修复] 使用事件委托，并确保只绑定一次事件监听器
-               // 先移除可能存在的旧事件监听器
-               pendingTableBody.removeEventListener('click', handlePendingTableClick);
-               // 重新绑定事件监听器
-               pendingTableBody.addEventListener('click', handlePendingTableClick);
+               document.querySelectorAll('.approve-btn').forEach(btn => {
+                   btn.addEventListener('click', function() {
+                       const id = this.dataset.id;
+                       handleApprove(id);
+                   })
+               });
+              document.querySelectorAll('.reject-btn').forEach(btn => {
+                    btn.addEventListener('click', function() {
+                         const id = this.dataset.id;
+                         handleReject(id);
+                     })
+              })
            }
-           
-           // [新增] 将待审核表格事件处理函数提取出来
-           function handlePendingTableClick(e) {
-               if (e.target.classList.contains('approve-btn')) {
-                   const id = e.target.dataset.id;
-                   handleApprove(id);
-               } else if (e.target.classList.contains('reject-btn')) {
-                   const id = e.target.dataset.id;
-                   handleReject(id);
-               }
-           }
+          
           function handleApprove(id) {
              if (!confirm('确定批准吗？')) return;
              fetch(\`/api/pending/\${id}\`, {
@@ -1614,27 +1950,12 @@ async exportConfig(request, env, ctx) {
                    fetchPendingConfigs(pendingCurrentPage + 1)
                }
             });
-            
-            // [新增] 待审核列表跳转到指定页面
-            pendingGoToPageBtn.addEventListener('click', () => {
-              const targetPage = parseInt(pendingPageInput.value);
-              const maxPage = Math.ceil(pendingTotalItems / pendingPageSize);
-              if (targetPage && targetPage >= 1 && targetPage <= maxPage) {
-                fetchPendingConfigs(targetPage);
-                pendingPageInput.value = ''; // 清空输入框
-              } else {
-                showMessage('请输入有效的页码', 'error');
-              }
-            });
-            
-            // [新增] 待审核列表回车键跳转
-            pendingPageInput.addEventListener('keydown', (e) => {
-              if (e.key === 'Enter') {
-                pendingGoToPageBtn.click();
-              }
-            });
+          
           fetchConfigs();
           fetchPendingConfigs();
+          if (categoryTableBody) {
+            fetchCategories();
+          }
           `
     }
     return fileContents[filePath]
@@ -1647,7 +1968,9 @@ async exportConfig(request, env, ctx) {
     });
     },
   
-    async renderLoginPage() {
+    async renderLoginPage(message = '') {
+      const hasError = Boolean(message);
+      const safeMessage = hasError ? escapeHTML(message) : '';
       const html = `<!DOCTYPE html>
       <html lang="zh-CN">
       <head>
@@ -1656,198 +1979,148 @@ async exportConfig(request, env, ctx) {
         <title>管理员登录</title>
         <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
         <style>
+          /* [优化] 全局重置与现代CSS最佳实践 */
           *, *::before, *::after {
             box-sizing: border-box;
           }
+          
           html, body {
-            height: 100%;
+            height: 100%; /* 确保flex容器能撑满整个屏幕 */
             margin: 0;
             padding: 0;
             font-family: 'Noto Sans SC', sans-serif;
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
           }
+
+          /* [优化] 主体布局，确保在任何设备上都完美居中 */
           body {
-            min-height: 100vh;
-            min-width: 100vw;
             display: flex;
             justify-content: center;
             align-items: center;
-            background: linear-gradient(135deg, #7209b7 0%, #4cc9f0 100%);
-            /* 渐变背景 */
-            overflow: hidden;
+            background-color: #f8f9fa;
+            padding: 1rem; /* 为小屏幕提供安全边距 */
           }
+
+          /* [优化] 登录容器样式 */
           .login-container {
-            position: relative;
-            z-index: 1;
+            background-color: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08), 0 4px 12px rgba(15, 23, 42, 0.05);
             width: 100%;
-            max-width: 400px;
-            padding: 2.5rem 2rem 2rem 2rem;
-            border-radius: 2rem;
-            background: rgba(255,255,255,0.18);
-            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.18);
-            backdrop-filter: blur(18px) saturate(1.5);
-            -webkit-backdrop-filter: blur(18px) saturate(1.5);
-            border: 2px solid rgba(255,255,255,0.25);
-            border-image: linear-gradient(120deg, #7209b7 0%, #4cc9f0 100%) 1;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            animation: fadeIn 0.7s cubic-bezier(.4,0,.2,1);
+            max-width: 380px;
+            animation: fadeIn 0.5s ease-out;
           }
+          
           @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(-20px); }
-            to { opacity: 1; transform: translateY(0); }
+            from {
+              opacity: 0;
+              transform: translateY(-10px);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0);
+            }
           }
+
           .login-title {
-            font-size: 2.2rem;
+            font-size: 1.75rem; /* 稍大一点更醒目 */
             font-weight: 700;
             text-align: center;
-            margin-bottom: 2rem;
-            background: linear-gradient(90deg, #7209b7 30%, #4cc9f0 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            color: transparent;
-            letter-spacing: 2px;
-          }
-          .form-group {
-            width: 100%;
-            margin-bottom: 1.5rem;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-          }
-          label {
-            align-self: flex-start;
-            margin-bottom: 0.5rem;
-            font-weight: 500;
-            color: #3b1f75;
-            letter-spacing: 1px;
-          }
-          input[type="text"], input[type="password"] {
-            width: 100%;
-            padding: 0.9rem 1.1rem;
-            border: none;
-            border-radius: 1rem;
-            font-size: 1.1rem;
-            background: rgba(255,255,255,0.7);
-            box-shadow: 0 2px 8px rgba(76,201,240,0.08);
-            transition: box-shadow 0.2s, border 0.2s;
-            outline: none;
+            margin: 0 0 1.5rem 0;
             color: #333;
           }
-          input[type="text"]:focus, input[type="password"]:focus {
-            box-shadow: 0 0 0 3px #4cc9f0aa;
-            background: rgba(255,255,255,0.95);
+
+          .form-group {
+            margin-bottom: 1.25rem;
           }
+
+          label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #555;
+          }
+
+          input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 0.875rem 1rem; /* 调整内边距，手感更好 */
+            border: 1px solid #ddd;
+            border-radius: 6px; /* 稍大的圆角 */
+            font-size: 1rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+          }
+
+          input:focus {
+            border-color: #7209b7;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(114, 9, 183, 0.15);
+          }
+
           button {
             width: 100%;
-            padding: 0.95rem;
-            margin-top: 0.5rem;
-            background: linear-gradient(90deg, #7209b7 0%, #4cc9f0 100%);
-            color: #fff;
+            padding: 0.875rem;
+            background-color: #7209b7;
+            color: white;
             border: none;
-            border-radius: 1rem;
-            font-size: 1.15rem;
-            font-weight: 600;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 500;
             cursor: pointer;
-            box-shadow: 0 2px 8px rgba(76,201,240,0.12);
-            transition: background 0.2s, transform 0.1s;
-            letter-spacing: 1px;
+            transition: background-color 0.2s, transform 0.1s;
           }
+
           button:hover {
-            background: linear-gradient(90deg, #4cc9f0 0%, #7209b7 100%);
-            transform: translateY(-2px) scale(1.03);
+            background-color: #5a067c;
           }
+          
+          button:active {
+            transform: scale(0.98);
+          }
+
           .error-message {
             color: #dc3545;
-            font-size: 0.95rem;
+            font-size: 0.875rem;
             margin-top: 0.5rem;
             text-align: center;
             display: none;
-            background: rgba(255,255,255,0.7);
-            border-radius: 0.5rem;
-            padding: 0.5rem 0;
           }
+
           .back-link {
             display: block;
             text-align: center;
-            margin-top: 2rem;
-            color: #4cc9f0;
-            text-decoration: none;
-            font-size: 1rem;
-            font-weight: 500;
-            letter-spacing: 1px;
-            transition: color 0.2s;
-          }
-          .back-link:hover {
+            margin-top: 1.5rem;
             color: #7209b7;
+            text-decoration: none;
+            font-size: 0.875rem;
+          }
+
+          .back-link:hover {
             text-decoration: underline;
-          }
-          /* 背景装饰光斑 */
-          .bg-blur {
-            position: absolute;
-            z-index: 0;
-            border-radius: 50%;
-            filter: blur(60px);
-            opacity: 0.35;
-            pointer-events: none;
-          }
-          .bg-blur1 {
-            width: 400px; height: 400px;
-            top: -120px; left: -120px;
-            background: linear-gradient(120deg, #7209b7 0%, #4cc9f0 100%);
-          }
-          .bg-blur2 {
-            width: 300px; height: 300px;
-            bottom: -100px; right: -100px;
-            background: linear-gradient(120deg, #4cc9f0 0%, #7209b7 100%);
-          }
-          @media (max-width: 500px) {
-            .login-container {
-              padding: 1.5rem 0.7rem 1.2rem 0.7rem;
-              max-width: 98vw;
-            }
-            .login-title {
-              font-size: 1.4rem;
-            }
           }
         </style>
       </head>
       <body>
-        <div class="bg-blur bg-blur1"></div>
-        <div class="bg-blur bg-blur2"></div>
         <div class="login-container">
           <h1 class="login-title">管理员登录</h1>
-          <form id="loginForm" autocomplete="off">
+          <form method="post" action="/admin" novalidate>
             <div class="form-group">
               <label for="username">用户名</label>
-              <input type="text" id="username" name="username" required autocomplete="username">
+              <input type="text" id="username" name="name" required autocomplete="username">
             </div>
             <div class="form-group">
               <label for="password">密码</label>
               <input type="password" id="password" name="password" required autocomplete="current-password">
             </div>
-            <div class="error-message" id="errorMessage">用户名或密码错误</div>
+            ${hasError ? `<div class="error-message" style="display:block;">${safeMessage}</div>` : `<div class="error-message">用户名或密码错误</div>`}
             <button type="submit">登 录</button>
           </form>
           <a href="/" class="back-link">返回首页</a>
         </div>
-        <script>
-          document.addEventListener('DOMContentLoaded', function() {
-            const loginForm = document.getElementById('loginForm');
-            const errorMessage = document.getElementById('errorMessage');
-            loginForm.addEventListener('submit', function(e) {
-              e.preventDefault();
-              const username = document.getElementById('username').value;
-              const password = document.getElementById('password').value;
-              window.location.href = '/admin?name=' + encodeURIComponent(username) + '&password=' + encodeURIComponent(password);
-            });
-          });
-        </script>
       </body>
       </html>`;
+      
       return new Response(html, {
         headers: { 'Content-Type': 'text/html; charset=utf-8' }
       });
@@ -1874,18 +2147,89 @@ async exportConfig(request, env, ctx) {
       return new Response('No site configuration found.', { status: 404 });
     }
 
+    const totalSites = sites.length;
     // 获取所有分类
-    const catalogs = Array.from(new Set(sites.map(s => s.catelog)));
+    const categoryMinSort = new Map();
+    const categorySet = new Set();
+    sites.forEach((site) => {
+      const categoryName = (site.catelog || '').trim() || '未分类';
+      categorySet.add(categoryName);
+      const rawSort = Number(site.sort_order);
+      const normalized = Number.isFinite(rawSort) ? rawSort : 9999;
+      if (!categoryMinSort.has(categoryName) || normalized < categoryMinSort.get(categoryName)) {
+        categoryMinSort.set(categoryName, normalized);
+      }
+    });
+
+    const categoryOrderMap = new Map();
+    try {
+      const { results: orderRows } = await env.NAV_DB.prepare('SELECT catelog, sort_order FROM category_orders').all();
+      orderRows.forEach(row => {
+        categoryOrderMap.set(row.catelog, normalizeSortOrder(row.sort_order));
+      });
+    } catch (error) {
+      if (!/no such table/i.test(error.message || '')) {
+        return new Response(`Failed to fetch category orders: ${error.message}`, { status: 500 });
+      }
+    }
+
+    const catalogsWithMeta = Array.from(categorySet).map((name) => {
+      const fallbackSort = categoryMinSort.has(name) ? normalizeSortOrder(categoryMinSort.get(name)) : 9999;
+      const order = categoryOrderMap.has(name) ? categoryOrderMap.get(name) : fallbackSort;
+      return {
+        name,
+        order,
+        fallback: fallbackSort,
+      };
+    });
+
+    catalogsWithMeta.sort((a, b) => {
+      if (a.order !== b.order) {
+        return a.order - b.order;
+      }
+      if (a.fallback !== b.fallback) {
+        return a.fallback - b.fallback;
+      }
+      return a.name.localeCompare(b.name, 'zh-Hans-CN', { sensitivity: 'base' });
+    });
+
+    const catalogs = catalogsWithMeta.map(item => item.name);
     
     // 根据 URL 参数筛选站点
-    const currentCatalog = catalog || catalogs[0];
-    const currentSites = catalog ? sites.filter(s => s.catelog === currentCatalog) : sites;
+    const requestedCatalog = (catalog || '').trim();
+    const catalogExists = Boolean(requestedCatalog && catalogs.includes(requestedCatalog));
+    const currentCatalog = catalogExists ? requestedCatalog : catalogs[0];
+    const currentSites = catalogExists
+      ? sites.filter((s) => {
+          const catValue = (s.catelog || '').trim() || '未分类';
+          return catValue === currentCatalog;
+        })
+      : sites;
+    const catalogLinkMarkup = catalogs.map((cat) => {
+      const safeCat = escapeHTML(cat);
+      const encodedCat = encodeURIComponent(cat);
+      const isActive = catalogExists && cat === currentCatalog;
+      const linkClass = isActive ? 'bg-secondary-100 text-primary-700' : 'hover:bg-gray-100';
+      const iconClass = isActive ? 'text-primary-600' : 'text-gray-400';
+      return `
+        <a href="?catalog=${encodedCat}" class="flex items-center px-3 py-2 rounded-lg ${linkClass} w-full">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2 ${iconClass}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+          </svg>
+          ${safeCat}
+        </a>
+      `;
+    }).join('');
 
-    // 为每个站点提取首字母
-    const sitesWithFirstLetter = currentSites.map(site => {
-      const firstLetter = site.name ? site.name.charAt(0).toUpperCase() : '';
-      return { ...site, firstLetter };
-    });
+    const datalistOptions = catalogs.map((cat) => `<option value="${escapeHTML(cat)}">`).join('');
+    const headingPlainText = catalogExists
+      ? `${currentCatalog} · ${currentSites.length} 个网站`
+      : `全部收藏 · ${sites.length} 个网站`;
+    const headingText = escapeHTML(headingPlainText);
+    const headingDefaultAttr = escapeHTML(headingPlainText);
+    const headingActiveAttr = catalogExists ? escapeHTML(currentCatalog) : '';
+    const submissionEnabled = isSubmissionEnabled(env);
+
     // 优化后的 HTML
     const html = `
     <!DOCTYPE html>
@@ -1893,9 +2237,9 @@ async exportConfig(request, env, ctx) {
     <head>
       <meta charset="UTF-8"/>
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>琪舟阁 - 指路人，亦是摘星人</title>
+      <title>琪舟阁</title>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet"/>
-      <link rel="icon" href="https://img.520jacky.dpdns.org/i/2026/02/12/866586.webp" type="image/webp"/>
+      <link rel="icon" href="https://img.520jacky.dpdns.org/i/2026/02/13/460490.webp" type="image/webp"/>
       <script src="https://cdn.tailwindcss.com"></script>
       <script>
         tailwind.config = {
@@ -1903,43 +2247,43 @@ async exportConfig(request, env, ctx) {
             extend: {
               colors: {
                 primary: {
-                  50: '#f4f1fd',
-                  100: '#e9e3fb',
-                  200: '#d3c7f7',
-                  300: '#b0a0f0',
-                  400: '#8a70e7',
-                  500: '#7209b7',
-                  600: '#6532cc',
-                  700: '#5429ab',
-                  800: '#46238d',
-                  900: '#3b1f75',
-                  950: '#241245',
+                  50: '#f3f5f9',
+                  100: '#e1e7f1',
+                  200: '#c3d0e3',
+                  300: '#9cb3d1',
+                  400: '#6c8fba',
+                  500: '#416d9d',
+                  600: '#305580',
+                  700: '#254267',
+                  800: '#1d3552',
+                  900: '#192e45',
+                  950: '#101e2d',
                 },
                 secondary: {
-                  50: '#eef4ff',
-                  100: '#e0ebff',
-                  200: '#c7d9ff',
-                  300: '#a3beff',
-                  400: '#7a9aff',
-                  500: '#5a77fb',
-                  600: '#4361ee',
-                  700: '#2c4be0',
-                  800: '#283db6',
-                  900: '#253690',
-                  950: '#1a265c',
+                  50: '#fdf8f3',
+                  100: '#f6ede1',
+                  200: '#ead6ba',
+                  300: '#dfc19a',
+                  400: '#d2aa79',
+                  500: '#b88d58',
+                  600: '#a17546',
+                  700: '#835b36',
+                  800: '#6b492c',
+                  900: '#5a3e26',
+                  950: '#2f1f13',
                 },
                 accent: {
-                  50: '#ecfdff',
-                  100: '#d0f7fe',
-                  200: '#a9eefe',
-                  300: '#72e0fd',
-                  400: '#33cafc',
-                  500: '#4cc9f0',
-                  600: '#0689cb',
-                  700: '#0b6ca6',
-                  800: '#115887',
-                  900: '#134971',
-                  950: '#0c2d48',
+                  50: '#f2faf6',
+                  100: '#d9f0e5',
+                  200: '#b4dfcb',
+                  300: '#89caa9',
+                  400: '#61b48a',
+                  500: '#3c976d',
+                  600: '#2e7755',
+                  700: '#265c44',
+                  800: '#204b38',
+                  900: '#1b3e30',
+                  950: '#0e221b',
                 },
               },
               fontFamily: {
@@ -1956,15 +2300,15 @@ async exportConfig(request, env, ctx) {
           height: 6px;
         }
         ::-webkit-scrollbar-track {
-          background: #f1f1f1;
+          background: #edf1f7;
           border-radius: 10px;
         }
         ::-webkit-scrollbar-thumb {
-          background: #d3c7f7;
+          background: #c3d0e3;
           border-radius: 10px;
         }
         ::-webkit-scrollbar-thumb:hover {
-          background: #7209b7;
+          background: #416d9d;
         }
         
         /* 卡片悬停效果 */
@@ -2030,7 +2374,7 @@ async exportConfig(request, env, ctx) {
         }
       </style>
     </head>
-    <body class="bg-gray-50 font-sans text-gray-800">
+    <body class="bg-secondary-50 font-sans text-gray-800">
       <!-- 侧边栏开关 -->
       <input type="checkbox" id="sidebar-toggle" class="hidden">
       
@@ -2056,10 +2400,10 @@ async exportConfig(request, env, ctx) {
       </div>
       
       <!-- 侧边栏导航 -->
-      <aside id="sidebar" class="sidebar fixed left-0 top-0 h-full w-64 bg-white shadow-lg z-50 overflow-y-auto mobile-sidebar lg:transform-none transition-all duration-300">
+      <aside id="sidebar" class="sidebar fixed left-0 top-0 h-full w-64 bg-white shadow-md border-r border-primary-100/60 z-50 overflow-y-auto mobile-sidebar lg:transform-none transition-all duration-300">
         <div class="p-6">
           <div class="flex items-center justify-between mb-8">
-            <h2 class="text-2xl font-bold sidebar-title-gradient">琪舟阁</h2>
+            <h2 class="text-2xl font-bold text-primary-600 tracking-tight">琪舟阁</h2>
             <button id="closeSidebar" class="p-1 rounded-full hover:bg-gray-100 lg:hidden">
               <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -2074,7 +2418,7 @@ async exportConfig(request, env, ctx) {
           
           <div class="mb-6">
             <div class="relative">
-              <input id="searchInput" type="text" placeholder="搜索书签..." class="w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-300">
+              <input id="searchInput" type="text" placeholder="搜索书签..." class="w-full pl-10 pr-4 py-2 border border-primary-100 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400 transition">
               <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-gray-400 absolute left-3 top-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
@@ -2084,36 +2428,36 @@ async exportConfig(request, env, ctx) {
           <div>
             <h3 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-3">分类导航</h3>
             <div class="space-y-1">
-              <a href="?" class="flex items-center px-3 py-2 rounded-lg w-full border-2 border-primary-100 bg-gradient-to-r from-white via-blue-50 to-blue-100 hover:from-blue-100 hover:to-blue-200 transition-colors duration-200 ${!catalog ? 'bg-primary-100 text-primary-700' : 'hover:bg-gray-100'}">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2 ${!catalog ? 'text-primary-500' : 'text-gray-400'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <a href="?" class="flex items-center px-3 py-2 rounded-lg ${catalogExists ? 'hover:bg-gray-100' : 'bg-secondary-100 text-primary-700'} w-full">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2 ${catalogExists ? 'text-gray-400' : 'text-primary-600'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                 </svg>
                 全部
               </a>
-              ${catalogs.map(cat => `
-                <a href="?catalog=${cat}" class="flex items-center px-3 py-2 rounded-lg w-full border-2 border-primary-100 bg-gradient-to-r from-white via-blue-50 to-blue-100 hover:from-blue-100 hover:to-blue-200 transition-colors duration-200 ${cat === currentCatalog && catalog ? 'bg-primary-100 text-primary-700' : 'hover:bg-gray-100'}">
-                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2 ${cat === currentCatalog && catalog ? 'text-primary-500' : 'text-gray-400'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-                  </svg>
-                  ${cat}
-                </a>
-              `).join('')}
+              ${catalogLinkMarkup}
             </div>
           </div>
           
           <div class="mt-8 pt-6 border-t border-gray-200">
-            <button id="addSiteBtnSidebar" class="w-full flex items-center justify-center px-4 py-2 bg-gradient-to-r from-white via-blue-50 to-blue-100 hover:from-blue-100 hover:to-blue-200 text-primary-700 rounded-lg border-2 border-primary-100 shadow-sm transition duration-300">
+            ${submissionEnabled ? `
+            <button id="addSiteBtnSidebar" class="w-full flex items-center justify-center px-4 py-2 bg-accent-500 text-white rounded-lg hover:bg-accent-600 transition duration-300">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+              </svg>
               添加新书签
-            </button>
+            </button>` : `
+            <div class="w-full px-4 py-3 text-xs text-primary-600 bg-white border border-secondary-100 rounded-lg">
+              访客书签提交功能已关闭
+            </div>`}
             
-            <a href="https://blog.520jacky.ip-ddns.com" target="_blank" class="mt-4 flex items-center px-4 py-2 text-gray-600 hover:text-primary-500 transition duration-300 w-full border-2 border-primary-100 bg-gradient-to-r from-white via-blue-50 to-blue-100 hover:from-blue-100 hover:to-blue-200 rounded-lg">
+            <a href="https://github.com/bayueqi/ZQ-NAV" target="_blank" class="mt-4 flex items-center px-4 py-2 text-gray-600 hover:text-primary-500 transition duration-300">
               <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
               </svg>
-              访问博客
+              项目地址
             </a>
 
-            <a href="/admin" target="_blank" class="mt-4 flex items-center px-4 py-2 text-gray-600 hover:text-primary-500 transition duration-300 w-full border-2 border-primary-100 bg-gradient-to-r from-white via-blue-50 to-blue-100 hover:from-blue-100 hover:to-blue-200 rounded-lg">
+            <a href="/admin" target="_blank" class="mt-4 flex items-center px-4 py-2 text-gray-600 hover:text-primary-500 transition duration-300">
               <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
               </svg>
@@ -2124,148 +2468,119 @@ async exportConfig(request, env, ctx) {
       </aside>
       
       <!-- 主内容区 -->
-      <main class="main-content lg:ml-64 min-h-screen transition-all duration-300 bg-gradient-to-br from-primary-50 via-accent-50 to-secondary-100">
+      <main class="main-content lg:ml-64 min-h-screen transition-all duration-300">
         <!-- 顶部横幅 -->
-        <header class="relative overflow-hidden py-14 px-6 md:px-12 flex flex-col items-center justify-center bg-gradient-to-r from-primary-500 via-secondary-400 to-accent-400 shadow-xl">
-          <div class="absolute inset-0 z-0" style="background: linear-gradient(120deg,rgba(255,255,255,0.08) 0%,rgba(76,201,240,0.12) 60%,rgba(114,9,183,0.10) 100%);"></div>
-          <div class="relative z-10 text-center">
-            <h1 class="text-3xl md:text-4xl font-extrabold mb-4 bg-gradient-to-r from-primary-300 via-secondary-500 to-accent-400 bg-clip-text text-transparent drop-shadow-lg animate-gradient-text">琪舟阁</h1>
-            <p class="text-lg md:text-xl font-light bg-gradient-to-r from-primary-100 via-secondary-200 to-accent-200 bg-clip-text text-transparent mb-2">万千星河，总有一束光，指向你未曾抵达的远方</p>
-          </div>
-        </header>
-        <!-- 全局搜索框 -->
-        <div class="w-full flex flex-col items-center justify-center px-2 mt-4">
-          <form id="globalSearchForm" class="flex flex-row items-center gap-2 w-full max-w-2xl" style="flex-wrap:nowrap;">
-            <input id="globalSearchInput" type="text" placeholder="搜索网页"
-              class="flex-1 px-4 py-2 border-2 border-primary-100 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400 transition bg-white text-base min-w-0"
-              required />
-            <select id="globalSearchEngine"
-              class="px-2 py-2 border-2 border-primary-100 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400 text-base min-w-0" style="width:90px;">
-              <option value="bing">Bing</option>
-              <option value="google">Google</option>
-              <option value="baidu">百度</option>
-              <option value="github">GitHub</option>
-            </select>
-            <button type="submit"
-              class="px-4 py-2 border-2 border-primary-200 shadow-sm text-base font-bold rounded-lg text-white bg-gradient-to-r from-primary-400 via-secondary-400 to-accent-400 hover:from-primary-500 hover:to-accent-500 focus:outline-none focus:ring-2 focus:ring-primary-200 transition min-w-0" style="white-space:nowrap;">搜索</button>
-          </form>
-        </div>
-        <style>
-        @media (max-width: 640px) {
-          #globalSearchForm {
-            flex-direction: row !important;
-            flex-wrap: nowrap !important;
-            gap: 0.5rem !important;
-          }
-          #globalSearchInput, #globalSearchEngine, #globalSearchForm button {
-            min-width: 0 !important;
-            font-size: 1rem !important;
-          }
-          #globalSearchInput {
-            flex: 1 1 0%;
-          }
-          #globalSearchEngine {
-            width: 80px !important;
-          }
-          #globalSearchForm button {
-            padding-left: 0.8rem;
-            padding-right: 0.8rem;
-          }
-        }
-        </style>
-        <script>
-          document.addEventListener('DOMContentLoaded', function() {
-            var form = document.getElementById('globalSearchForm');
-            if(form) {
-              form.addEventListener('submit', function(e) {
-                e.preventDefault();
-                var kw = document.getElementById('globalSearchInput').value.trim();
-                var engine = document.getElementById('globalSearchEngine').value;
-                if(!kw) return;
-                var url = '';
-                switch(engine) {
-                  case 'bing':
-                    url = 'https://www.bing.com/search?q=' + encodeURIComponent(kw); break;
-                  case 'google':
-                    url = 'https://www.google.com/search?q=' + encodeURIComponent(kw); break;
-                  case 'baidu':
-                    url = 'https://www.baidu.com/s?wd=' + encodeURIComponent(kw); break;
-                  case 'github':
-                    url = 'https://github.com/search?q=' + encodeURIComponent(kw); break;
-                  default:
-                    url = 'https://www.bing.com/search?q=' + encodeURIComponent(kw);
-                }
-                window.open(url, '_blank');
-              });
-            }
-          });
-        </script>
-        <!-- 网站列表 -->
-        <section class="max-w-7xl mx-auto px-4 sm:px-8 py-14">
-          <!-- 当前分类/搜索提示 -->
-          <div class="flex flex-col sm:flex-row items-center justify-between mb-10 gap-4">
-            <h2 class="text-2xl md:text-3xl font-bold flex items-center gap-2 bg-gradient-to-r from-primary-400 via-secondary-500 to-accent-400 bg-clip-text text-transparent">
-              <span id="siteCount">${catalog ? `${currentCatalog} · ${currentSites.length} 个网站` : `全部收藏 · ${sites.length} 个网站`}</span>
-            </h2>
-            <div class="text-sm px-5 py-2 rounded-full shadow-lg flex items-center gap-2 bg-gradient-to-r from-primary-200 via-secondary-100 to-accent-100 border border-primary-100">
-              <script>
-               fetch('https://v1.hitokoto.cn')
-                .then(response => response.json())
-                .then(data => {
-                const hitokoto = document.getElementById('hitokoto_text')
-                hitokoto.href = 'https://github.com/BAYUEQI' 
-                hitokoto.innerText = data.hitokoto
-                })
-                .catch(console.error)
-              </script>
-              <div id="hitokoto"><a href="#" target="_blank" id="hitokoto_text">指路人，亦是摘星人</a></div>
+        <header class="bg-primary-700 text-white py-10 px-6 md:px-10 border-b border-primary-600 shadow-sm">
+          <div class="max-w-5xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+            <div class="flex-1 text-center md:text-left">
+              <span class="inline-flex items-center gap-2 rounded-full bg-primary-600/70 px-3 py-1 text-[11px] uppercase tracking-[0.28em] text-secondary-200/80">
+                生如夏花之绚烂，死如秋叶之静美。
+              </span>
+              <h1 class="mt-4 text-3xl md:text-4xl font-semibold tracking-tight">琪舟阁</h1>
+              <p class="mt-3 text-sm md:text-base text-secondary-100/90 leading-relaxed">
+                - 指路人，亦是摘星人。
+              </p>
+            </div>
+            <div class="w-full md:w-auto flex justify-center md:justify-end">
+              <div class="rounded-2xl bg-white/10 backdrop-blur-md px-6 py-5 shadow-lg border border-white/10 text-left md:text-right">
+                <p class="text-xs uppercase tracking-[0.28em] text-secondary-100/70">Current Overview</p>
+                <p class="mt-3 text-2xl font-semibold">${totalSites}</p>
+                <p class="text-sm text-secondary-100/85">条书签 · ${catalogs.length} 个分类</p>
+              </div>
             </div>
           </div>
+        </header>
+        
+        <!-- 网站列表 -->
+        <section class="max-w-7xl mx-auto px-4 sm:px-6 py-8">
+          <!-- 当前分类/搜索提示 -->
+          <div class="flex items-center justify-between mb-6">
+            <h2 class="text-xl font-semibold text-gray-800" data-role="list-heading" data-default="${headingDefaultAttr}" data-active="${headingActiveAttr}">
+              ${headingText}
+            </h2>
+            <div class="text-sm text-gray-500 hidden md:block">
+              <script>
+                 fetch('https://v1.hitokoto.cn')
+                      .then(response => response.json())
+                      .then(data => {
+                       const hitokoto = document.getElementById('hitokoto_text')
+                      hitokoto.href = 'https://github.com/bayueqi'
+                      hitokoto.innerText = data.hitokoto
+                      })
+                      .catch(console.error)
+              </script>
+              <div id="hitokoto"><a href="#" target="_blank" id="hitokoto_text">疏影横斜水清浅，暗香浮动月黄昏。</a></div>
+            </div>
+          </div>
+          
           <!-- 网站卡片网格 -->
-          <div id="sitesGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
-            ${sitesWithFirstLetter.map(site => `
-              <div class="site-card group rounded-3xl shadow-2xl border-2 border-transparent hover:border-accent-300 bg-gradient-to-br from-white via-primary-50 to-accent-50 hover:from-primary-100 hover:to-accent-100 transition-all duration-300 relative overflow-hidden" data-name="${site.name || ''}" data-url="${site.url || ''}" data-catalog="${site.catelog || ''}">
-                <div class="absolute -top-10 -right-10 w-32 h-32 bg-gradient-to-br from-primary-200 via-accent-100 to-secondary-100 rounded-full opacity-30 blur-2xl z-0"></div>
-                <div class="p-7 relative z-10 flex flex-col h-full">
-                  <a href="${site.url}" target="_blank" class="block">
-                    <div class="flex items-center mb-4">
-                      <div class="flex-shrink-0 mr-5">
-                        <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-400 via-secondary-400 to-accent-400 flex items-center justify-center text-white font-extrabold text-3xl shadow-lg border-2 border-primary-200 overflow-hidden">
-                          ${site.logo && site.logo.trim() ? `<img src="${site.logo}" alt="${site.name}" onerror="this.style.display='none'; this.parentElement.innerText='${site.firstLetter}';" class="w-full h-full object-contain p-2"/>` : `<span>${site.firstLetter}</span>`}
+          <div class="rounded-2xl border border-primary-100/60 bg-white/80 backdrop-blur-sm p-4 sm:p-6 shadow-sm">
+            <div id="sitesGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
+              ${currentSites.map((site) => {
+              const rawName = site.name || '未命名';
+              const rawCatalog = site.catelog || '未分类';
+              const rawDesc = site.desc || '暂无描述';
+              const normalizedUrl = sanitizeUrl(site.url);
+              const hrefValue = escapeHTML(normalizedUrl || '#');
+              const displayUrlText = normalizedUrl || site.url || '';
+              const safeDisplayUrl = displayUrlText ? escapeHTML(displayUrlText) : '未提供链接';
+              const dataUrlAttr = escapeHTML(normalizedUrl || '');
+              const logoUrl = sanitizeUrl(site.logo);
+              const cardInitial = escapeHTML((rawName.trim().charAt(0) || '站').toUpperCase());
+              const safeName = escapeHTML(rawName);
+              const safeCatalog = escapeHTML(rawCatalog);
+              const safeDesc = escapeHTML(rawDesc);
+              const safeDataName = escapeHTML(site.name || '');
+              const safeDataCatalog = escapeHTML(site.catelog || '');
+              const hasValidUrl = Boolean(normalizedUrl);
+              return `
+                <div class="site-card group bg-white border border-primary-100/60 rounded-xl shadow-sm hover:shadow-md hover:-translate-y-[2px] transition-all duration-200 overflow-hidden" data-id="${site.id}" data-name="${safeDataName}" data-url="${dataUrlAttr}" data-catalog="${safeDataCatalog}">
+                  <div class="p-5">
+                    <a href="${hrefValue}" ${hasValidUrl ? 'target="_blank" rel="noopener noreferrer"' : ''} class="block">
+                      <div class="flex items-start">
+                        <div class="flex-shrink-0 mr-4">
+                          ${
+                            logoUrl
+                              ? `<img src="${escapeHTML(logoUrl)}" alt="${safeName}" class="w-10 h-10 rounded-lg object-cover bg-gray-100">`
+                              : `<div class="w-10 h-10 rounded-lg bg-primary-600 flex items-center justify-center text-white font-semibold text-lg shadow-inner">${cardInitial}</div>`
+                          }
+                        </div>
+                        <div class="flex-1 min-w-0">
+                          <h3 class="text-base font-medium text-gray-900 truncate" title="${safeName}">${safeName}</h3>
+                          <span class="inline-flex items-center px-2 py-0.5 mt-1 rounded-full text-xs font-medium bg-secondary-100 text-primary-700">
+                            ${safeCatalog}
+                          </span>
                         </div>
                       </div>
-                      <div class="flex-1 min-w-0">
-                        <h3 class="text-lg font-bold bg-gradient-to-r from-primary-500 via-secondary-500 to-accent-500 bg-clip-text text-transparent truncate">${site.name}</h3>
-                        <span class="inline-flex items-center px-3 py-1 mt-2 rounded-full text-xs font-bold bg-gradient-to-r from-primary-200 via-secondary-200 to-accent-200 text-primary-800 shadow border border-primary-100">
-                          ${site.catelog}
-                        </span>
-                      </div>
+                      
+                      <p class="mt-2 text-sm text-gray-600 leading-relaxed line-clamp-2" title="${safeDesc}">${safeDesc}</p>
+                    </a>
+                    
+                    <div class="mt-3 flex items-center justify-between">
+                      <span class="text-xs text-primary-600 truncate max-w-[140px]" title="${safeDisplayUrl}">${safeDisplayUrl}</span>
+                      <button class="copy-btn relative flex items-center px-2 py-1 ${hasValidUrl ? 'bg-accent-100 text-accent-700 hover:bg-accent-200' : 'bg-gray-200 text-gray-400 cursor-not-allowed'} rounded-full text-xs font-medium transition-colors" data-url="${dataUrlAttr}" ${hasValidUrl ? '' : 'disabled'}>
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                        </svg>
+                        复制
+                        <span class="copy-success hidden absolute -top-8 right-0 bg-accent-500 text-white text-xs px-2 py-1 rounded shadow-md">已复制!</span>
+                      </button>
                     </div>
-                    <p class="mt-2 text-sm text-gray-700 line-clamp-2 bg-gradient-to-r from-primary-50 via-accent-50 to-secondary-100 rounded-lg px-2 py-1 shadow-inner" title="${site.desc || '暂无描述'}">${site.desc || '暂无描述'}</p>
-                  </a>
-                  <div class="mt-auto flex items-center justify-between pt-5">
-                    <span class="text-xs text-gray-400 truncate max-w-[140px] font-mono">${site.url}</span>
-                    <button class="copy-btn flex items-center px-3 py-1 bg-gradient-to-r from-primary-300 via-secondary-200 to-accent-200 text-primary-700 hover:from-accent-300 hover:to-primary-200 rounded-full text-xs font-bold transition-all duration-200 shadow-md border border-primary-200 relative group/copy" data-url="${site.url}">
-                      <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                      </svg>
-                      复制
-                      <span class="copy-success hidden absolute -top-8 right-0 bg-gradient-to-r from-green-400 to-accent-400 text-white text-xs px-2 py-1 rounded shadow-md">已复制!</span>
-                    </button>
                   </div>
                 </div>
-              </div>
-            `).join('')}
+              `;
+            }).join('')}
+            </div>
           </div>
         </section>
+        
         <!-- 页脚 -->
-        <footer class="bg-gradient-to-r from-primary-50 via-secondary-50 to-accent-50 py-10 px-6 mt-20 border-t-4 border-gradient-to-r from-primary-200 via-secondary-200 to-accent-200 shadow-inner">
+        <footer class="bg-white py-8 px-6 mt-12 border-t border-primary-100">
           <div class="max-w-5xl mx-auto text-center">
-            <div class="w-full h-2 bg-gradient-to-r from-primary-200 via-secondary-200 to-accent-200 rounded-full mb-8 opacity-80"></div>
-            <p class="text-lg font-bold bg-gradient-to-r from-primary-400 via-secondary-500 to-accent-400 bg-clip-text text-transparent">© ${new Date().getFullYear()} 琪舟阁 | 愿你在此找到方向</p>
-            <div class="mt-6 flex justify-center space-x-8">
-              <a href="https://blog.520jacky.ip-ddns.com/" target="_blank" class="text-gray-400 hover:text-primary-500 transition-colors">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <p class="text-gray-500">© ${new Date().getFullYear()} 琪舟阁 | 愿你在此找到方向</p>
+            <div class="mt-4 flex justify-center space-x-6">
+              <a href="https://github.com/bayueqi" target="_blank" class="text-gray-400 hover:text-primary-500 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
                 </svg>
               </a>
@@ -2273,73 +2588,70 @@ async exportConfig(request, env, ctx) {
           </div>
         </footer>
       </main>
-      <style>
-        /* 只保留主标题轻微动画，其余全部静态渐变，提升性能 */
-        @keyframes gradient-text {
-          0% { filter: brightness(1) saturate(1); }
-          50% { filter: brightness(1.15) saturate(1.2); }
-          100% { filter: brightness(1) saturate(1); }
-        }
-        .animate-gradient-text {
-          animation: gradient-text 3s ease-in-out infinite;
-        }
-      </style>
       
       <!-- 返回顶部按钮 -->
-      <button id="backToTop" class="fixed bottom-8 right-8 z-50 p-3 rounded-full bg-gradient-to-r from-primary-400 via-secondary-400 to-accent-400 text-white shadow-lg opacity-0 invisible transition-all duration-300 hover:brightness-110 hover:shadow-2xl border-2 border-primary-200">
+      <button id="backToTop" class="fixed bottom-8 right-8 p-3 rounded-full bg-accent-500 text-white shadow-lg opacity-0 invisible transition-all duration-300 hover:bg-accent-600">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 11l7-7 7 7M5 19l7-7 7 7" />
         </svg>
       </button>
       
+      ${submissionEnabled ? `
       <!-- 添加网站模态框 -->
       <div id="addSiteModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 opacity-0 invisible transition-all duration-300">
-        <div class="w-full max-w-md mx-4 transform translate-y-8 transition-all duration-300 rounded-2xl shadow-2xl border-2 border-blue-100 bg-gradient-to-br from-white via-blue-50 to-blue-100">
-          <div class="p-8">
-            <div class="flex items-center justify-between mb-6">
-              <h2 class="text-2xl font-bold bg-gradient-to-r from-primary-400 via-secondary-400 to-accent-400 bg-clip-text text-transparent">添加新书签</h2>
-              <button id="closeModal" class="text-gray-400 hover:text-primary-500 transition-colors rounded-full p-1 focus:outline-none focus:ring-2 focus:ring-primary-200">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 transform translate-y-8 transition-all duration-300">
+          <div class="p-6">
+            <div class="flex items-center justify-between mb-4">
+              <h2 class="text-xl font-semibold text-gray-900">添加新书签</h2>
+              <button id="closeModal" class="text-gray-400 hover:text-gray-500">
                 <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
-            <form id="addSiteForm" class="space-y-5">
+            
+            <form id="addSiteForm" class="space-y-4">
               <div>
-                <label for="addSiteName" class="block text-sm font-medium text-gray-700 mb-1">名称</label>
-                <input type="text" id="addSiteName" required class="mt-1 block w-full px-4 py-2 border-2 border-primary-100 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400 transition"/>
+                <label for="addSiteName" class="block text-sm font-medium text-gray-700">名称</label>
+                <input type="text" id="addSiteName" required class="mt-1 block w-full px-3 py-2 border border-primary-100 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400">
               </div>
+              
               <div>
-                <label for="addSiteUrl" class="block text-sm font-medium text-gray-700 mb-1">网址</label>
-                <input type="text" id="addSiteUrl" required class="mt-1 block w-full px-4 py-2 border-2 border-primary-100 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400 transition"/>
+                <label for="addSiteUrl" class="block text-sm font-medium text-gray-700">网址</label>
+                <input type="text" id="addSiteUrl" required class="mt-1 block w-full px-3 py-2 border border-primary-100 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400">
               </div>
+              
               <div>
-                <label for="addSiteDesc" class="block text-sm font-medium text-gray-700 mb-1">描述 (可选)</label>
-                <textarea id="addSiteDesc" rows="2" class="mt-1 block w-full px-4 py-2 border-2 border-primary-100 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400 transition"></textarea>
+                <label for="addSiteLogo" class="block text-sm font-medium text-gray-700">Logo (可选)</label>
+                <input type="text" id="addSiteLogo" class="mt-1 block w-full px-3 py-2 border border-primary-100 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400">
               </div>
+              
               <div>
-                <label for="addSiteLogo" class="block text-sm font-medium text-gray-700 mb-1">图标 URL (可选)</label>
-                <input type="text" id="addSiteLogo" class="mt-1 block w-full px-4 py-2 border-2 border-primary-100 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400 transition" placeholder="留空则自动获取网站图标"/>
+                <label for="addSiteDesc" class="block text-sm font-medium text-gray-700">描述 (可选)</label>
+                <textarea id="addSiteDesc" rows="2" class="mt-1 block w-full px-3 py-2 border border-primary-100 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400"></textarea>
               </div>
+              
               <div>
-                <label for="addSiteCatelog" class="block text-sm font-medium text-gray-700 mb-1">分类</label>
-                <input type="text" id="addSiteCatelog" required class="mt-1 block w-full px-4 py-2 border-2 border-primary-100 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400 transition" list="catalogList"/>
+                <label for="addSiteCatelog" class="block text-sm font-medium text-gray-700">分类</label>
+                <input type="text" id="addSiteCatelog" required class="mt-1 block w-full px-3 py-2 border border-primary-100 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400" list="catalogList">
                 <datalist id="catalogList">
-                  ${catalogs.map(cat => `<option value="${cat}">`).join('')}
+                  ${datalistOptions}
                 </datalist>
               </div>
-              <div>
-                <label for="addSiteSortOrder" class="block text-sm font-medium text-gray-700 mb-1">排序（可选）</label>
-                <input type="number" id="addSiteSortOrder" class="mt-1 block w-full px-4 py-2 border-2 border-primary-100 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-400 transition" placeholder="不填则自动排到最后"/>
-              </div>
-              <div class="flex justify-end pt-6 gap-3">
-                <button type="button" id="cancelAddSite" class="bg-gray-100 text-gray-600 border border-gray-200 rounded-lg px-5 py-2 font-medium hover:bg-gray-200 transition">取消</button>
-                <button type="submit" class="inline-flex justify-center px-6 py-2 border-2 border-primary-200 shadow-sm text-sm font-bold rounded-lg text-white bg-gradient-to-r from-primary-400 via-secondary-400 to-accent-400 hover:from-primary-500 hover:to-accent-500 focus:outline-none focus:ring-2 focus:ring-primary-200 transition">提交</button>
+              
+              <div class="flex justify-end pt-4">
+                <button type="button" id="cancelAddSite" class="bg-white py-2 px-4 border border-primary-100 rounded-md shadow-sm text-sm font-medium text-primary-600 hover:bg-secondary-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-200 mr-3">
+                  取消
+                </button>
+                <button type="submit" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-accent-500 hover:bg-accent-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent-400">
+                  提交
+                </button>
               </div>
             </form>
           </div>
         </div>
       </div>
+      ` : ''}
       
       <script>
         document.addEventListener('DOMContentLoaded', function() {
@@ -2371,6 +2683,9 @@ async exportConfig(request, env, ctx) {
               e.preventDefault();
               e.stopPropagation();
               const url = this.getAttribute('data-url');
+              if (!url) {
+                return;
+              }
               navigator.clipboard.writeText(url).then(() => {
                 const successMsg = this.querySelector('.copy-success');
                 successMsg.classList.remove('hidden');
@@ -2455,11 +2770,8 @@ async exportConfig(request, env, ctx) {
             addSiteBtnSidebar.addEventListener('click', function(e) {
               e.preventDefault();
               e.stopPropagation();
-              console.log('添加书签按钮被点击');
               openModal();
             });
-          } else {
-            console.error('未找到添加书签按钮元素');
           }
           
           if (closeModalBtn) {
@@ -2487,24 +2799,23 @@ async exportConfig(request, env, ctx) {
               
               const name = document.getElementById('addSiteName').value;
               const url = document.getElementById('addSiteUrl').value;
-              const desc = document.getElementById('addSiteDesc').value;
               const logo = document.getElementById('addSiteLogo').value;
+              const desc = document.getElementById('addSiteDesc').value;
               const catelog = document.getElementById('addSiteCatelog').value;
-              const sort_order = document.getElementById('addSiteSortOrder').value;
               
               fetch('/api/config/submit', {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ name, url, desc, logo, catelog, sort_order })
+                body: JSON.stringify({ name, url, logo, desc, catelog })
               })
               .then(res => res.json())
               .then(data => {
                 if (data.code === 201) {
                   // 显示成功消息
                   const successDiv = document.createElement('div');
-                  successDiv.className = 'fixed top-4 right-4 bg-green-500 text-white px-4 py-2 rounded shadow-lg z-50 animate-fade-in';
+                  successDiv.className = 'fixed top-4 right-4 bg-accent-500 text-white px-4 py-2 rounded shadow-lg z-50 animate-fade-in';
                   successDiv.textContent = '提交成功，等待管理员审核';
                   document.body.appendChild(successDiv);
                   
@@ -2534,9 +2845,7 @@ async exportConfig(request, env, ctx) {
           const searchInput = document.getElementById('searchInput');
           const sitesGrid = document.getElementById('sitesGrid');
           const siteCards = document.querySelectorAll('.site-card');
-          const siteCountSpan = document.getElementById('siteCount');
-          const originalSiteCountText = siteCountSpan ? siteCountSpan.textContent : '';
-
+          
           if (searchInput && sitesGrid) {
             searchInput.addEventListener('input', function() {
               const keyword = this.value.toLowerCase().trim();
@@ -2544,9 +2853,9 @@ async exportConfig(request, env, ctx) {
               siteCards.forEach(card => {
                 const name = (card.getAttribute('data-name') || '').toLowerCase();
                 const url = (card.getAttribute('data-url') || '').toLowerCase();
-                const catalog = (card.getAttribute('data-catalog') || '').toLowerCase();
+                const catalogValue = (card.getAttribute('data-catalog') || '').toLowerCase();
                 
-                if (name.includes(keyword) || url.includes(keyword) || catalog.includes(keyword)) {
+                if (name.includes(keyword) || url.includes(keyword) || catalogValue.includes(keyword)) {
                   card.classList.remove('hidden');
                 } else {
                   card.classList.add('hidden');
@@ -2555,11 +2864,17 @@ async exportConfig(request, env, ctx) {
               
               // 搜索结果提示
               const visibleCards = sitesGrid.querySelectorAll('.site-card:not(.hidden)');
-              if (siteCountSpan) {
+              const countHeading = document.querySelector('[data-role="list-heading"]');
+              if (countHeading) {
+                const defaultText = countHeading.dataset.default || '';
+                const activeCatalogText = countHeading.dataset.active || '';
                 if (keyword) {
-                  siteCountSpan.textContent = '搜索结果 · ' + visibleCards.length + ' 个网站';
+                  countHeading.textContent = '搜索结果 · ' + visibleCards.length + ' 个网站';
+                } else if (activeCatalogText) {
+                  countHeading.textContent = activeCatalogText + ' · ' + visibleCards.length + ' 个网站';
                 } else {
-                  siteCountSpan.textContent = originalSiteCountText;
+                  const totalText = defaultText.includes('全部收藏') ? defaultText.replace(/\\d+ 个网站/, visibleCards.length + ' 个网站') : '全部收藏 · ' + visibleCards.length + ' 个网站';
+                  countHeading.textContent = totalText;
                 }
               }
             });
