@@ -1,6 +1,3 @@
-/**
- * 备用随机 SVG 图标 - 优化设计
- */
 export const fallbackSVGIcons = [
   `<svg width="80" height="80" viewBox="0 0 24 24" fill="url(#gradient1)" xmlns="http://www.w3.org/2000/svg">
      <defs>
@@ -48,7 +45,7 @@ function renderSiteCard(site) {
 
   return `
     <div class="channel-card" data-id="${site.id}">
-      <div class="channel-number">${site.id}</div>
+      <div class="channel-number">${site.sort_order}</div>
       <h3 class="channel-title">${site.name || '未命名'}</h3>
       <span class="channel-tag">${site.catelog}</span>
       <div class="logo-wrapper">${logoHTML}</div>
@@ -383,15 +380,21 @@ async function isAdminAuthenticated(request, env) {
                 if(results.length === 0) {
                     return this.errorResponse('Pending config not found', 404);
                 }
-                 const config = results[0];
-                 //- [优化] 批准时，插入的数据也包含了 sort_order 的默认值
+                const config = results[0];
+                let targetSortOrder = 1;
+                if (!config.sort_order || config.sort_order === '' || config.sort_order === 9999) {
+                    const maxSortResult = await env.NAV_DB.prepare('SELECT MAX(sort_order) as max_sort FROM sites WHERE sort_order != 9999').first();
+                    targetSortOrder = (maxSortResult && maxSortResult.max_sort ? maxSortResult.max_sort + 1 : 1);
+                } else {
+                    targetSortOrder = parseInt(config.sort_order) || 1;
+                }
+                await env.NAV_DB.prepare('UPDATE sites SET sort_order = sort_order + 1 WHERE sort_order >= ? AND sort_order != 9999').bind(targetSortOrder).run();
                 await env.NAV_DB.prepare(`
-                    INSERT INTO sites (name, url, logo, desc, catelog, sort_order)
-                    VALUES (?, ?, ?, ?, ?, 9999) 
-              `).bind(config.name, config.url, config.logo, config.desc, config.catelog).run();
+                    INSERT INTO sites (name, url, desc, logo, catelog, sort_order)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                `).bind(config.name, config.url, config.desc, config.logo, config.catelog, targetSortOrder).run();
                 await env.NAV_DB.prepare('DELETE FROM pending_sites WHERE id = ?').bind(id).run();
-  
-                 return new Response(JSON.stringify({
+                return new Response(JSON.stringify({
                     code: 200,
                     message: 'Pending config approved successfully'
                 }),{
@@ -451,24 +454,32 @@ async function isAdminAuthenticated(request, env) {
     async createConfig(request, env, ctx) {
           try{
               const config = await request.json();
-              //- [新增] 从请求体中获取 sort_order
               const { name, url, logo, desc, catelog, sort_order } = config;
               const sanitizedName = (name || '').trim();
               const sanitizedUrl = (url || '').trim();
               const sanitizedCatelog = (catelog || '').trim();
               const sanitizedLogo = (logo || '').trim() || null;
               const sanitizedDesc = (desc || '').trim() || null;
-              const sortOrderValue = normalizeSortOrder(sort_order);
-  
+
               if (!sanitizedName || !sanitizedUrl || !sanitizedCatelog ) {
                   return this.errorResponse('Name, URL and Catelog are required', 400);
               }
-              //- [优化] INSERT 语句增加了 sort_order 字段
+              
+              let targetSortOrder = 1;
+              if (!sort_order || sort_order === '') {
+                  const maxSortResult = await env.NAV_DB.prepare('SELECT MAX(sort_order) as max_sort FROM sites WHERE sort_order != 9999').first();
+                  targetSortOrder = (maxSortResult && maxSortResult.max_sort ? maxSortResult.max_sort + 1 : 1);
+              } else {
+                  targetSortOrder = parseInt(sort_order) || 1;
+              }
+              
+              await env.NAV_DB.prepare('UPDATE sites SET sort_order = sort_order + 1 WHERE sort_order >= ? AND sort_order != 9999').bind(targetSortOrder).run();
+              
               const insert = await env.NAV_DB.prepare(`
                     INSERT INTO sites (name, url, logo, desc, catelog, sort_order)
                     VALUES (?, ?, ?, ?, ?, ?)
-              `).bind(sanitizedName, sanitizedUrl, sanitizedLogo, sanitizedDesc, sanitizedCatelog, sortOrderValue).run(); // 如果sort_order未提供，则默认为9999
-  
+              `).bind(sanitizedName, sanitizedUrl, sanitizedLogo, sanitizedDesc, sanitizedCatelog, targetSortOrder).run();
+
             return new Response(JSON.stringify({
               code: 201,
               message: 'Config created successfully',
@@ -486,24 +497,41 @@ async function isAdminAuthenticated(request, env) {
 		async updateConfig(request, env, ctx, id) {
           try {
               const config = await request.json();
-              //- [新增] 从请求体中获取 sort_order
               const { name, url, logo, desc, catelog, sort_order } = config;
               const sanitizedName = (name || '').trim();
               const sanitizedUrl = (url || '').trim();
               const sanitizedCatelog = (catelog || '').trim();
               const sanitizedLogo = (logo || '').trim() || null;
               const sanitizedDesc = (desc || '').trim() || null;
-              const sortOrderValue = normalizeSortOrder(sort_order);
-  
+
             if (!sanitizedName || !sanitizedUrl || !sanitizedCatelog) {
               return this.errorResponse('Name, URL and Catelog are required', 400);
             }
-            //- [优化] UPDATE 语句增加了 sort_order 字段
+            
+            let targetSortOrder = 9999;
+            if (sort_order && sort_order !== '') {
+                const inputSortOrder = parseInt(sort_order);
+                if (!isNaN(inputSortOrder)) {
+                    targetSortOrder = inputSortOrder;
+                }
+            }
+            
+            const currentResult = await env.NAV_DB.prepare('SELECT sort_order FROM sites WHERE id = ?').bind(id).first();
+            const currentSortOrder = currentResult ? currentResult.sort_order : 9999;
+            
+            if (targetSortOrder !== currentSortOrder && targetSortOrder !== 9999) {
+                if (targetSortOrder < currentSortOrder) {
+                    await env.NAV_DB.prepare('UPDATE sites SET sort_order = sort_order + 1 WHERE sort_order >= ? AND sort_order < ? AND id != ? AND sort_order != 9999').bind(targetSortOrder, currentSortOrder, id).run();
+                } else {
+                    await env.NAV_DB.prepare('UPDATE sites SET sort_order = sort_order - 1 WHERE sort_order > ? AND sort_order <= ? AND id != ? AND sort_order != 9999').bind(currentSortOrder, targetSortOrder, id).run();
+                }
+            }
+
             const update = await env.NAV_DB.prepare(`
                 UPDATE sites
                 SET name = ?, url = ?, logo = ?, desc = ?, catelog = ?, sort_order = ?, update_time = CURRENT_TIMESTAMP
                 WHERE id = ?
-            `).bind(sanitizedName, sanitizedUrl, sanitizedLogo, sanitizedDesc, sanitizedCatelog, sortOrderValue, id).run();
+            `).bind(sanitizedName, sanitizedUrl, sanitizedLogo, sanitizedDesc, sanitizedCatelog, targetSortOrder, id).run();
             return new Response(JSON.stringify({
                 code: 200,
                 message: 'Config updated successfully',
@@ -516,7 +544,18 @@ async function isAdminAuthenticated(request, env) {
   
       async deleteConfig(request, env, ctx, id) {
           try{
+              const currentResult = await env.NAV_DB.prepare('SELECT sort_order FROM sites WHERE id = ?').bind(id).first();
+              if (!currentResult) {
+                  return this.errorResponse('Config not found', 404);
+              }
+              const deletedSortOrder = currentResult.sort_order;
+              
               const del = await env.NAV_DB.prepare('DELETE FROM sites WHERE id = ?').bind(id).run();
+              
+              if (deletedSortOrder !== 9999) {
+                  await env.NAV_DB.prepare('UPDATE sites SET sort_order = sort_order - 1 WHERE sort_order > ? AND sort_order != 9999').bind(deletedSortOrder).run();
+              }
+              
               return new Response(JSON.stringify({
                   code: 200,
                   message: 'Config deleted successfully',
@@ -531,25 +570,25 @@ async function isAdminAuthenticated(request, env) {
           const jsonData = await request.json();
           let sitesToImport = [];
 
-          // [优化] 智能判断导入的JSON文件格式
-          // 1. 如果 jsonData 本身就是数组 (新的、正确的导出格式)
           if (Array.isArray(jsonData)) {
             sitesToImport = jsonData;
-          } 
-          // 2. 如果 jsonData 是一个对象，且包含一个名为 'data' 的数组 (兼容旧的导出格式)
-          else if (jsonData && typeof jsonData === 'object' && Array.isArray(jsonData.data)) {
+          } else if (jsonData && typeof jsonData === 'object' && Array.isArray(jsonData.data)) {
             sitesToImport = jsonData.data;
-          } 
-          // 3. 如果两种都不是，则格式无效
-          else {
-            return this.errorResponse('Invalid JSON data. Must be an array of site configurations, or an object with a "data" key containing the array.', 400);
+          } else {
+            return this.errorResponse('Invalid JSON data. Must be an array of site configurations, or an object with a "data" key containing array.', 400);
           }
           
           if (sitesToImport.length === 0) {
             return new Response(JSON.stringify({
               code: 200,
-              message: 'Import successful, but no data was found in the file.'
+              message: 'Import successful, but no data was found in file.'
             }), { headers: {'Content-Type': 'application/json'} });
+          }
+
+          const urls = sitesToImport.map(item => (item.url || '').trim()).filter(url => url);
+          if (urls.length > 0) {
+              const placeholders = urls.map(() => '?').join(',');
+              await env.NAV_DB.prepare(`DELETE FROM sites WHERE url IN (${placeholders})`).bind(...urls).run();
           }
 
           const insertStatements = sitesToImport.map(item => {
@@ -565,12 +604,11 @@ async function isAdminAuthenticated(request, env) {
                   `).bind(sanitizedName, sanitizedUrl, sanitizedLogo, sanitizedDesc, sanitizedCatelog, sortOrderValue);
             })
   
-          // 使用 D1 的 batch 操作，效率更高
           await env.NAV_DB.batch(insertStatements);
   
           return new Response(JSON.stringify({
               code: 201,
-              message: `Config imported successfully. ${sitesToImport.length} items added.`
+              message: `Config imported successfully. ${sitesToImport.length} items processed.`
           }), {
               status: 201,
               headers: {'Content-Type': 'application/json'}
@@ -582,18 +620,12 @@ async function isAdminAuthenticated(request, env) {
   
 async exportConfig(request, env, ctx) {
         try{
-          // [优化] 导出的数据将不再被包裹在 {code, data} 对象中
           const { results } = await env.NAV_DB.prepare('SELECT * FROM sites ORDER BY sort_order ASC, create_time DESC').all();
-          
-          // JSON.stringify 的第二和第三个参数用于“美化”输出的JSON，
-          // null 表示不替换任何值，2 表示使用2个空格进行缩进。
-          // 这使得导出的文件非常易于阅读和手动编辑。
           const pureJsonData = JSON.stringify(results, null, 2); 
 
           return new Response(pureJsonData, {
               headers: {
                 'Content-Type': 'application/json; charset=utf-8',
-                // 确保浏览器将其作为文件下载
                 'Content-Disposition': 'attachment; filename="config.json"'
               }
           });
@@ -606,9 +638,9 @@ async exportConfig(request, env, ctx) {
               const categoryOrderMap = new Map();
               try {
                   const { results: orderRows } = await env.NAV_DB.prepare('SELECT catelog, sort_order FROM category_orders').all();
-                  orderRows.forEach(row => {
+                  for (const row of orderRows) {
                       categoryOrderMap.set(row.catelog, normalizeSortOrder(row.sort_order));
-                  });
+                  }
               } catch (error) {
                   if (!/no such table/i.test(error.message || '')) {
                       throw error;
@@ -621,23 +653,22 @@ async exportConfig(request, env, ctx) {
                 GROUP BY catelog
               `).all();
 
-              const data = results.map(row => ({
-                  catelog: row.catelog,
-                  site_count: row.site_count,
-                  sort_order: categoryOrderMap.has(row.catelog)
-                    ? categoryOrderMap.get(row.catelog)
-                    : normalizeSortOrder(row.min_site_sort),
-                  explicit: categoryOrderMap.has(row.catelog),
-                  min_site_sort: row.min_site_sort === null ? 9999 : normalizeSortOrder(row.min_site_sort)
-              }));
+              const data = results.map(row => {
+                  const minSort = row.min_site_sort === null ? 9999 : normalizeSortOrder(row.min_site_sort);
+                  return {
+                      catelog: row.catelog,
+                      site_count: row.site_count,
+                      sort_order: categoryOrderMap.get(row.catelog) ?? minSort,
+                      explicit: categoryOrderMap.has(row.catelog),
+                      min_site_sort: minSort
+                  };
+              });
 
               data.sort((a, b) => {
-                  if (a.sort_order !== b.sort_order) {
-                      return a.sort_order - b.sort_order;
-                  }
-                  if (a.min_site_sort !== b.min_site_sort) {
-                      return a.min_site_sort - b.min_site_sort;
-                  }
+                  const sortDiff = a.sort_order - b.sort_order;
+                  if (sortDiff !== 0) return sortDiff;
+                  const minSortDiff = a.min_site_sort - b.min_site_sort;
+                  if (minSortDiff !== 0) return minSortDiff;
                   return a.catelog.localeCompare(b.catelog, 'zh-Hans-CN', { sensitivity: 'base' });
               });
 
@@ -834,13 +865,12 @@ async exportConfig(request, env, ctx) {
                         <table id="configTable">
                             <thead>
                                 <tr>
-                                  <th>ID</th>
                                   <th>Name</th>
                                   <th>URL</th>
                                   <th>Logo</th>
                                   <th>Description</th>
                                   <th>Catelog</th>
-                                  <th>排序</th> <!-- [新增] 表格头增加排序 -->
+                                  <th>排序</th>
                                   <th>Actions</th>
                                 </tr>
                             </thead>
@@ -860,7 +890,6 @@ async exportConfig(request, env, ctx) {
                    <table id="pendingTable">
                       <thead>
                         <tr>
-                            <th>ID</th>
                              <th>Name</th>
                              <th>URL</th>
                             <th>Logo</th>
@@ -1453,7 +1482,7 @@ async exportConfig(request, env, ctx) {
                 configTableBody.innerHTML = '<tr><td colspan="7">没有配置数据</td></tr>';
                 return
             }
-          configs.forEach(config => {
+          configs.forEach((config, index) => {
               const row = document.createElement('tr');
               const safeName = escapeHTML(config.name || '');
               const normalizedUrl = normalizeUrl(config.url);
@@ -1467,17 +1496,14 @@ async exportConfig(request, env, ctx) {
                 : 'N/A';
               const descCell = config.desc ? escapeHTML(config.desc) : 'N/A';
               const catelogCell = escapeHTML(config.catelog || '');
-              const sortValue = config.sort_order === 9999 || config.sort_order === null || config.sort_order === undefined
-                ? '默认'
-                : escapeHTML(config.sort_order);
+              const sortValue = config.sort_order || 9999;
                row.innerHTML = \`
-                 <td>\${config.id}</td>
                   <td>\${safeName}</td>
                   <td>\${urlCell}</td>
                   <td>\${logoCell}</td>
                   <td>\${descCell}</td>
                   <td>\${catelogCell}</td>
-				 <td>\${sortValue}</td> <!-- [新增] 显示排序值 -->
+				 <td>\${sortValue}</td>
                   <td class="actions">
                     <button class="edit-btn" data-id="\${config.id}">编辑</button>
                     <button class="del-btn" data-id="\${config.id}">删除</button>
@@ -1872,7 +1898,6 @@ async exportConfig(request, env, ctx) {
                     const descCell = config.desc ? escapeHTML(config.desc) : 'N/A';
                     const catelogCell = escapeHTML(config.catelog || '');
                     row.innerHTML = \`
-                      <td>\${config.id}</td>
                        <td>\${safeName}</td>
                        <td>\${urlCell}</td>
                        <td>\${logoCell}</td>
