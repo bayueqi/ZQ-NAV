@@ -36,12 +36,45 @@ function getRandomSVG() {
 }
 
 /**
+ * 获取图标 API URL
+ */
+function getIconApiUrl(env) {
+  try {
+    const iconApiUrl = env.FaviconApi;
+    if (iconApiUrl) {
+      return iconApiUrl;
+    }
+  } catch (error) {
+    console.error('Get icon API URL error:', error);
+  }
+  return 'https://toolb.cn/favicon/{domain}';
+}
+
+/**
  * 渲染单个网站卡片（优化版）
  */
-function renderSiteCard(site) {
-  const logoHTML = site.logo
-    ? `<img src="${site.logo}" alt="${site.name}"/>`
-    : getRandomSVG();
+function renderSiteCard(site, env) {
+  let logoHTML;
+  const safeName = site.name || '';
+  
+  if (site.logo) {
+    // 如果有logo URL，优先使用
+    logoHTML = `<img src="${site.logo}" alt="${safeName}" data-site-name="${safeName}" onerror="this.onerror=null; this.remove(); if(this.parentElement && this.dataset.siteName) { this.parentElement.innerHTML = this.dataset.siteName.charAt(0).toUpperCase(); }"/>`;
+  } else if (site.url) {
+    // 如果没有logo URL但有网站URL，使用图标API
+    try {
+      const url = new URL(site.url);
+      const domain = url.hostname;
+      const iconUrl = getIconApiUrl(env).replace('{domain}', domain);
+      logoHTML = `<img src="${iconUrl}" alt="${safeName}" data-site-name="${safeName}" onerror="this.onerror=null; this.remove(); if(this.parentElement && this.dataset.siteName) { this.parentElement.innerHTML = this.dataset.siteName.charAt(0).toUpperCase(); }"/>`;
+    } catch (error) {
+      // 如果URL解析失败，使用首字母
+      logoHTML = safeName ? safeName.charAt(0).toUpperCase() : '?';
+    }
+  } else {
+    // 如果都没有，使用首字母
+    logoHTML = safeName ? safeName.charAt(0).toUpperCase() : getRandomSVG();
+  }
 
   return `
     <div class="channel-card" data-id="${site.id}">
@@ -781,7 +814,7 @@ async exportConfig(request, env, ctx) {
 
       const session = await validateAdminSession(request, env);
       if (session.authenticated) {
-        return this.renderAdminPage();
+        return this.renderAdminPage(env);
       }
 
       return this.renderLoginPage();
@@ -824,6 +857,10 @@ async exportConfig(request, env, ctx) {
       <title>书签管理页面</title>
       <link rel="stylesheet" href="/static/admin.css">
       <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap" rel="stylesheet">
+      <script>
+        // 全局配置
+        const faviconApi = 'https://toolb.cn/favicon/{domain}';
+      </script>
     </head>
     <body>
       <div class="container">
@@ -1491,9 +1528,22 @@ async exportConfig(request, env, ctx) {
                 ? \`<a href="\${escapeHTML(normalizedUrl)}" target="_blank" rel="noopener noreferrer">\${escapeHTML(normalizedUrl)}</a>\`
                 : displayUrl;
               const normalizedLogo = normalizeUrl(config.logo);
-              const logoCell = normalizedLogo
-                ? \`<img src="\${escapeHTML(normalizedLogo)}" alt="\${safeName}" style="width:30px;" />\`
-                : 'N/A';
+              let logoCell;
+              const initial = safeName.charAt(0).toUpperCase() || '?';
+              if (normalizedLogo) {
+                logoCell = \`<img src="\${escapeHTML(normalizedLogo)}" alt="\${safeName}" style="width:30px; display: block;" onerror="this.onerror=null; this.style.display='none'; this.parentNode.innerHTML = '\${initial}';" />\`;
+              } else if (normalizedUrl) {
+                try {
+                  const url = new URL(normalizedUrl);
+                  const domain = url.hostname;
+                  const iconUrl = faviconApi.replace('{domain}', domain);
+                  logoCell = \`<img src="\${escapeHTML(iconUrl)}" alt="\${safeName}" style="width:30px; display: block;" onerror="this.onerror=null; this.style.display='none'; this.parentNode.innerHTML = '\${initial}';" />\`;
+                } catch (error) {
+                  logoCell = initial;
+                }
+              } else {
+                logoCell = initial;
+              }
               const descCell = config.desc ? escapeHTML(config.desc) : 'N/A';
               const catelogCell = escapeHTML(config.catelog || '');
               const sortValue = config.sort_order || 9999;
@@ -1892,9 +1942,22 @@ async exportConfig(request, env, ctx) {
                       ? \`<a href="\${escapeHTML(normalizedUrl)}" target="_blank" rel="noopener noreferrer">\${escapeHTML(normalizedUrl)}</a>\`
                       : (config.url ? escapeHTML(config.url) : '未提供');
                     const normalizedLogo = normalizeUrl(config.logo);
-                    const logoCell = normalizedLogo
-                      ? \`<img src="\${escapeHTML(normalizedLogo)}" alt="\${safeName}" style="width:30px;" />\`
-                      : 'N/A';
+                    let logoCell;
+                    const initial = safeName.charAt(0).toUpperCase() || '?';
+                    if (normalizedLogo) {
+                      logoCell = \`<img src="\${escapeHTML(normalizedLogo)}" alt="\${safeName}" style="width:30px; display: block;" onerror="this.onerror=null; this.style.display='none'; this.parentNode.innerHTML = '\${initial}';" />\`;
+                    } else if (normalizedUrl) {
+                      try {
+                        const url = new URL(normalizedUrl);
+                        const domain = url.hostname;
+                        const iconUrl = faviconApi.replace('{domain}', domain);
+                        logoCell = \`<img src="\${escapeHTML(iconUrl)}" alt="\${safeName}" style="width:30px; display: block;" onerror="this.onerror=null; this.style.display='none'; this.parentNode.innerHTML = '\${initial}';" />\`;
+                      } catch (error) {
+                        logoCell = initial;
+                      }
+                    } else {
+                      logoCell = initial;
+                    }
                     const descCell = config.desc ? escapeHTML(config.desc) : 'N/A';
                     const catelogCell = escapeHTML(config.catelog || '');
                     row.innerHTML = \`
@@ -1986,8 +2049,10 @@ async exportConfig(request, env, ctx) {
     return fileContents[filePath]
     },
   
-    async renderAdminPage() {
-    const html = await this.getFileContent('admin.html');
+    async renderAdminPage(env) {
+    let html = await this.getFileContent('admin.html');
+    const faviconApi = getIconApiUrl(env);
+    html = html.replace('const faviconApi = \'https://toolb.cn/favicon/{domain}\';', `const faviconApi = '${faviconApi}';`);
     return new Response(html, {
         headers: {'Content-Type': 'text/html; charset=utf-8'}
     });
@@ -2254,6 +2319,7 @@ async exportConfig(request, env, ctx) {
     const headingDefaultAttr = escapeHTML(headingPlainText);
     const headingActiveAttr = catalogExists ? escapeHTML(currentCatalog) : '';
     const submissionEnabled = isSubmissionEnabled(env);
+    const faviconApi = getIconApiUrl(env);
 
     // 优化后的 HTML
     const html = `
@@ -2264,7 +2330,7 @@ async exportConfig(request, env, ctx) {
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <title>琪舟阁</title>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet"/>
-      <link rel="icon" href="https://img.520jacky.dpdns.org/i/2026/02/13/460490.webp" type="image/webp"/>
+      <link rel="icon" href="https://img.520jacky.dpdns.org/i/2026/03/06/057561.png" type="image/webp"/>
       <script src="https://cdn.tailwindcss.com"></script>
       <script>
         tailwind.config = {
@@ -2558,17 +2624,34 @@ async exportConfig(request, env, ctx) {
               const safeDataName = escapeHTML(site.name || '');
               const safeDataCatalog = escapeHTML(site.catelog || '');
               const hasValidUrl = Boolean(normalizedUrl);
+              
+              let logoHTML;
+              if (logoUrl) {
+                // 如果有logo URL，优先使用
+                logoHTML = `<img src="${escapeHTML(logoUrl)}" alt="${safeName}" class="w-10 h-10 rounded-lg object-cover bg-gray-100" data-site-name="${safeDataName}" onerror="handleIconError(this, '${cardInitial}')"/>`;
+              } else if (normalizedUrl) {
+                // 如果没有logo URL但有网站URL，使用图标API
+                try {
+                  const url = new URL(normalizedUrl);
+                  const domain = url.hostname;
+                  const iconUrl = getIconApiUrl(env).replace('{domain}', domain);
+                  logoHTML = `<img src="${escapeHTML(iconUrl)}" alt="${safeName}" class="w-10 h-10 rounded-lg object-cover bg-gray-100" data-site-name="${safeDataName}" onerror="handleIconError(this, '${cardInitial}')"/>`;
+                } catch (error) {
+                  // 如果URL解析失败，使用首字母
+                  logoHTML = `<div class="w-10 h-10 rounded-lg bg-primary-600 flex items-center justify-center text-white font-semibold text-lg shadow-inner">${cardInitial}</div>`;
+                }
+              } else {
+                // 如果都没有，使用首字母
+                logoHTML = `<div class="w-10 h-10 rounded-lg bg-primary-600 flex items-center justify-center text-white font-semibold text-lg shadow-inner">${cardInitial}</div>`;
+              }
+              
               return `
                 <div class="site-card group bg-white border border-primary-100/60 rounded-xl shadow-sm hover:shadow-md hover:-translate-y-[2px] transition-all duration-200 overflow-hidden" data-id="${site.id}" data-name="${safeDataName}" data-url="${dataUrlAttr}" data-catalog="${safeDataCatalog}">
                   <div class="p-5">
                     <a href="${hrefValue}" ${hasValidUrl ? 'target="_blank" rel="noopener noreferrer"' : ''} class="block">
                       <div class="flex items-start">
                         <div class="flex-shrink-0 mr-4">
-                          ${
-                            logoUrl
-                              ? `<img src="${escapeHTML(logoUrl)}" alt="${safeName}" class="w-10 h-10 rounded-lg object-cover bg-gray-100">`
-                              : `<div class="w-10 h-10 rounded-lg bg-primary-600 flex items-center justify-center text-white font-semibold text-lg shadow-inner">${cardInitial}</div>`
-                          }
+                          ${logoHTML}
                         </div>
                         <div class="flex-1 min-w-0">
                           <h3 class="text-base font-medium text-gray-900 truncate" title="${safeName}">${safeName}</h3>
@@ -2679,6 +2762,20 @@ async exportConfig(request, env, ctx) {
       ` : ''}
       
       <script>
+        // 全局配置
+        const faviconApi = '${faviconApi}';
+        
+        // 图标错误处理函数
+        function handleIconError(img, initial) {
+          img.onerror = null;
+          const parent = img.parentElement;
+          const siteName = img.dataset.siteName;
+          img.remove();
+          if (parent) {
+            parent.innerHTML = '<div class="w-10 h-10 rounded-lg bg-primary-600 flex items-center justify-center text-white font-semibold text-lg shadow-inner">' + initial + '</div>';
+          }
+        }
+        
         document.addEventListener('DOMContentLoaded', function() {
           // 侧边栏控制
           const sidebar = document.getElementById('sidebar');
