@@ -64,13 +64,9 @@ logo TEXT,
 "desc" TEXT,
 catelog TEXT NOT NULL,
 status TEXT,
+sort_order INTEGER NOT NULL DEFAULT 9999,
 create_time DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-```创建正式列表排列顺序
-ALTER TABLE sites ADD COLUMN sort_order INTEGER DEFAULT 9999;
-ALTER TABLE pending_sites ADD COLUMN sort_order INTEGER DEFAULT 9999;
--- 创建审核列表排列顺序
-ALTER TABLE pending_sites ADD COLUMN sort_order INTEGER DEFAULT 9999;
 ```
 > **提示**: 使用 SQL 是最快捷的方式。如果你想手动建表，请确保字段名、类型与上述 SQL 一致。
 
@@ -78,8 +74,6 @@ ALTER TABLE pending_sites ADD COLUMN sort_order INTEGER DEFAULT 9999;
 
 1.  在 Cloudflare 控制台，进入 `Workers & Pages` -> `KV`。
 2.  点击 `创建命名空间`，名称输入 `NAV_AUTH`。
-4f2d-2bf0-4f26-aa86-90e22286e94b)
-
 3.  创建后，为此 KV 添加两个条目，用于设置后台登录的 **用户名** 和 **密码**。
     -   **admin_username**: 你的管理员用户名（例如 `admin`）
     -   **admin_password**: 你的管理员密码
@@ -90,7 +84,7 @@ ALTER TABLE pending_sites ADD COLUMN sort_order INTEGER DEFAULT 9999;
 1.  回到 `Workers & Pages`，点击 `创建应用程序` -> `创建 Worker`。
 2.  为你的 Worker 指定一个名称（例如 `my-nav`），然后点击 `部署`。
 
-3.  部署后，点击 `编辑代码`。将本项目 `worker1.js` 文件中的所有代码复制并粘贴到编辑器中，替换掉原有内容。
+3.  部署后，点击 `编辑代码`。将本项目 `_worker.js` 文件中的所有代码复制并粘贴到编辑器中，替换掉原有内容。
 4.  点击 `部署` 保存代码。
 
 ### 步骤 4: 绑定服务
@@ -102,6 +96,13 @@ ALTER TABLE pending_sites ADD COLUMN sort_order INTEGER DEFAULT 9999;
 3.  在 **KV 命名空间绑定** 中，点击 `添加绑定`：
     -   变量名称: `NAV_AUTH`
     -   KV 命名空间: 选择你创建的 `NAV_AUTH`
+4.  （可选）在 **环境变量** 中，点击 `添加变量`，添加以下可选配置：
+    -   变量名称: `FaviconApi`
+    -   值: 自定义的图标API URL，例如 `https://toolb.cn/favicon/{domain}`
+    -   环境: 生产
+    -   加密: 否
+    
+    > **说明**: 如果不设置 `FaviconApi`，系统会默认使用 `https://toolb.cn/favicon/{domain}`
 ### 步骤 5: 开始使用
 
 1.  访问你的 Worker 域名（例如 `my-nav.your-subdomain.workers.dev`）。首次访问会提示没有数据。
@@ -111,7 +112,7 @@ ALTER TABLE pending_sites ADD COLUMN sort_order INTEGER DEFAULT 9999;
 
 ### 项目结构
 
--   `worker.js`: 包含所有后端逻辑、API 路由和前端页面渲染的入口文件。
+-   `_worker.js`: 包含所有后端逻辑、API 路由和前端页面渲染的入口文件。
 -   主要逻辑模块:
     -   `api`: 处理所有数据交互的 API 请求。
     -   `admin`: 负责后台管理界面的渲染和逻辑。
