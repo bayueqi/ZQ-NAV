@@ -349,16 +349,16 @@ async function isAdminAuthenticated(request, env) {
   
                   if (keyword) {
                       const likeKeyword = `%${keyword}%`;
-                      query = `SELECT * FROM sites WHERE name LIKE ? OR url LIKE ? OR catelog LIKE ? ORDER BY sort_order ASC, create_time DESC LIMIT ? OFFSET ?`;
-                      countQuery = `SELECT COUNT(*) as total FROM sites WHERE name LIKE ? OR url LIKE ? OR catelog LIKE ?`;
-                      queryBindParams = [likeKeyword, likeKeyword, likeKeyword, pageSize, offset];
-                      countQueryParams = [likeKeyword, likeKeyword, likeKeyword];
-  
+                      query = `SELECT * FROM sites WHERE name LIKE ? OR url LIKE ? OR catelog LIKE ? OR desc LIKE ? ORDER BY sort_order ASC, create_time DESC LIMIT ? OFFSET ?`;
+                      countQuery = `SELECT COUNT(*) as total FROM sites WHERE name LIKE ? OR url LIKE ? OR catelog LIKE ? OR desc LIKE ?`;
+                      queryBindParams = [likeKeyword, likeKeyword, likeKeyword, likeKeyword, pageSize, offset];
+                      countQueryParams = [likeKeyword, likeKeyword, likeKeyword, likeKeyword];
+
                       if (catalog) {
-                          query = `SELECT * FROM sites WHERE catelog = ? AND (name LIKE ? OR url LIKE ? OR catelog LIKE ?) ORDER BY sort_order ASC, create_time DESC LIMIT ? OFFSET ?`;
-                          countQuery = `SELECT COUNT(*) as total FROM sites WHERE catelog = ? AND (name LIKE ? OR url LIKE ? OR catelog LIKE ?)`;
-                          queryBindParams = [catalog, likeKeyword, likeKeyword, likeKeyword, pageSize, offset];
-                          countQueryParams = [catalog, likeKeyword, likeKeyword, likeKeyword];
+                          query = `SELECT * FROM sites WHERE catelog = ? AND (name LIKE ? OR url LIKE ? OR catelog LIKE ? OR desc LIKE ?) ORDER BY sort_order ASC, create_time DESC LIMIT ? OFFSET ?`;
+                          countQuery = `SELECT COUNT(*) as total FROM sites WHERE catelog = ? AND (name LIKE ? OR url LIKE ? OR catelog LIKE ? OR desc LIKE ?)`;
+                          queryBindParams = [catalog, likeKeyword, likeKeyword, likeKeyword, likeKeyword, pageSize, offset];
+                          countQueryParams = [catalog, likeKeyword, likeKeyword, likeKeyword, likeKeyword];
                       }
                   }
   
@@ -1398,7 +1398,7 @@ async exportConfig(request, env, ctx) {
           // 添加搜索框
           const searchInput = document.createElement('input');
           searchInput.type = 'text';
-          searchInput.placeholder = '搜索书签(名称，URL，分类)';
+          searchInput.placeholder = '搜索书签(名称，URL，分类，描述)';
           searchInput.id = 'searchInput';
           searchInput.style.marginBottom = '10px';
           document.querySelector('.add-new').parentNode.insertBefore(searchInput, document.querySelector('.add-new'));
@@ -2646,7 +2646,7 @@ async exportConfig(request, env, ctx) {
               }
               
               return `
-                <div class="site-card group bg-white border border-primary-100/60 rounded-xl shadow-sm hover:shadow-md hover:-translate-y-[2px] transition-all duration-200 overflow-hidden" data-id="${site.id}" data-name="${safeDataName}" data-url="${dataUrlAttr}" data-catalog="${safeDataCatalog}">
+                <div class="site-card group bg-white border border-primary-100/60 rounded-xl shadow-sm hover:shadow-md hover:-translate-y-[2px] transition-all duration-200 overflow-hidden" data-id="${site.id}" data-name="${safeDataName}" data-url="${dataUrlAttr}" data-catalog="${safeDataCatalog}" data-desc="${safeDesc}">
                   <div class="p-5">
                     <a href="${hrefValue}" ${hasValidUrl ? 'target="_blank" rel="noopener noreferrer"' : ''} class="block">
                       <div class="flex items-start">
@@ -2976,8 +2976,9 @@ async exportConfig(request, env, ctx) {
                 const name = (card.getAttribute('data-name') || '').toLowerCase();
                 const url = (card.getAttribute('data-url') || '').toLowerCase();
                 const catalogValue = (card.getAttribute('data-catalog') || '').toLowerCase();
+                const desc = (card.getAttribute('data-desc') || '').toLowerCase();
                 
-                if (name.includes(keyword) || url.includes(keyword) || catalogValue.includes(keyword)) {
+                if (name.includes(keyword) || url.includes(keyword) || catalogValue.includes(keyword) || desc.includes(keyword)) {
                   card.classList.remove('hidden');
                 } else {
                   card.classList.add('hidden');
