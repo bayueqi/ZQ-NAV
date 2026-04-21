@@ -322,6 +322,9 @@ async function isAdminAuthenticated(request, env) {
               }
               return await this.getPendingConfig(request, env, ctx, url);
             }
+            if (path === '/logout' && method === 'POST') {
+              return await this.logout(request, env, ctx);
+            }
             return this.errorResponse('Not Found', 404);
         } catch (error) {
             return this.errorResponse(`Internal Server Error: ${error.message}`, 500);
@@ -750,6 +753,33 @@ async exportConfig(request, env, ctx) {
               return this.errorResponse(`Failed to update category order: ${e.message}`, 500);
           }
       },
+      async logout(request, env, ctx) {
+          try {
+              const cookies = parseCookies(request.headers.get('Cookie') || '');
+              const token = cookies[SESSION_COOKIE_NAME];
+              
+              // 销毁会话
+              if (token) {
+                  await destroyAdminSession(env, token);
+              }
+              
+              // 清除 cookie（设置 Max-Age=0 会立即删除 cookie）
+              const clearCookie = buildSessionCookie('', { maxAge: 0 });
+              
+              return new Response(JSON.stringify({
+                  code: 200,
+                  message: 'Logged out successfully'
+              }), { 
+                  status: 200,
+                  headers: { 
+                      'Content-Type': 'application/json',
+                      'Set-Cookie': clearCookie 
+                  }
+              });
+          } catch (e) {
+              return this.errorResponse(`Failed to logout: ${e.message}`, 500);
+          }
+      },
        errorResponse(message, status) {
           return new Response(JSON.stringify({code: status, message: message}), {
               status: status,
@@ -766,22 +796,7 @@ async exportConfig(request, env, ctx) {
   async handleRequest(request, env, ctx) {
     const url = new URL(request.url);
 
-    if (url.pathname === '/admin/logout') {
-      if (request.method !== 'POST') {
-        return new Response('Method Not Allowed', { status: 405 });
-      }
-      const { token } = await validateAdminSession(request, env);
-      if (token) {
-        await destroyAdminSession(env, token);
-      }
-      return new Response(null, {
-        status: 302,
-        headers: {
-          Location: '/admin',
-          'Set-Cookie': buildSessionCookie('', { maxAge: 0 }),
-        },
-      });
-    }
+
 
     if (url.pathname === '/admin') {
       if (request.method === 'POST') {
@@ -868,9 +883,7 @@ async exportConfig(request, env, ctx) {
               <h1>书签管理</h1>
               <p class="admin-subtitle">管理后台仅限受信任的管理员使用，请妥善保管账号</p>
             </div>
-            <form method="post" action="/admin/logout">
-              <button type="submit" class="logout-btn">退出登录</button>
-            </form>
+            <button id="logoutBtn" class="logout-btn">退出登录</button>
           </header>
       
           <div class="import-export">
@@ -1090,21 +1103,22 @@ async exportConfig(request, env, ctx) {
         color: #6c757d;
         font-size: 0.95rem;
     }
+    
     .logout-btn {
-        background-color: #f8f9fa;
-        color: #495057;
-        border: 1px solid #ced4da;
-        padding: 8px 14px;
-        border-radius: 6px;
+        background-color: #dc3545;
+        color: #fff;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 4px;
         cursor: pointer;
-        font-size: 0.95rem;
-        transition: background-color 0.2s, color 0.2s, box-shadow 0.2s;
+        font-size: 1rem;
+        transition: background-color 0.3s;
     }
+    
     .logout-btn:hover {
-        background-color: #e9ecef;
-        color: #212529;
-        box-shadow: 0 3px 10px rgba(0,0,0,0.08);
+        background-color: #c82333;
     }
+
     .tab-wrapper {
         margin-top: 20px;
     }
@@ -2042,6 +2056,30 @@ async exportConfig(request, env, ctx) {
           fetchPendingConfigs();
           if (categoryTableBody) {
             fetchCategories();
+          }
+          
+          // 退出登录功能
+          const logoutBtn = document.getElementById('logoutBtn');
+          if (logoutBtn) {
+            logoutBtn.addEventListener('click', () => {
+              if (!confirm('确定要退出登录吗？')) return;
+              
+              fetch('/api/logout', {
+                method: 'POST'
+              }).then(res => res.json())
+                .then(data => {
+                  if (data.code === 200) {
+                    showMessage('已成功退出登录', 'success');
+                    setTimeout(() => {
+                      window.location.href = '/admin';
+                    }, 1000);
+                  } else {
+                    showMessage(data.message || '退出失败', 'error');
+                  }
+                }).catch(err => {
+                  showMessage('网络错误', 'error');
+                });
+            });
           }
           `
     }
