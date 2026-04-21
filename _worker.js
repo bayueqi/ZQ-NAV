@@ -2498,6 +2498,18 @@ async exportConfig(request, env, ctx) {
             margin-left: 0;
           }
         }
+        
+        /* 性能优化样式 */
+        .logo-img {
+          will-change: opacity;
+        }
+        
+        /* 预连接优化 - 减少 DNS 查找延迟 */
+        body::before {
+          content: "";
+          display: none;
+          /* 预连接常用的图标 API（如果有） */
+        }
       </style>
     </head>
     <body class="bg-secondary-50 font-sans text-gray-800">
@@ -2661,46 +2673,63 @@ async exportConfig(request, env, ctx) {
               const hasValidUrl = Boolean(normalizedUrl);
               
               let logoHTML;
+              let finalIconUrl = null;
+              
               if (logoUrl) {
                 // 如果有logo URL，优先使用
-                logoHTML = `<img src="${escapeHTML(logoUrl)}" alt="${safeName}" class="w-10 h-10 rounded-lg object-cover bg-gray-100" data-site-name="${safeDataName}" onerror="handleIconError(this, '${cardInitial}')"/>`;
+                finalIconUrl = escapeHTML(logoUrl);
               } else if (normalizedUrl) {
                 // 如果没有logo URL但有网站URL，使用图标API
                 try {
                   const url = new URL(normalizedUrl);
                   const domain = url.hostname;
-                  const iconUrl = getIconApiUrl(env).replace('{domain}', domain);
-                  logoHTML = `<img src="${escapeHTML(iconUrl)}" alt="${safeName}" class="w-10 h-10 rounded-lg object-cover bg-gray-100" data-site-name="${safeDataName}" onerror="handleIconError(this, '${cardInitial}')"/>`;
+                  finalIconUrl = escapeHTML(getIconApiUrl(env).replace('{domain}', domain));
                 } catch (error) {
-                  // 如果URL解析失败，使用首字母
-                  logoHTML = `<div class="w-10 h-10 rounded-lg bg-primary-600 flex items-center justify-center text-white font-semibold text-lg shadow-inner">${cardInitial}</div>`;
+                  // URL解析失败，继续使用首字母
                 }
+              }
+              
+              if (finalIconUrl) {
+                // 使用懒加载：先显示首字母，然后懒加载图标
+                logoHTML = `
+                  <div class="logo-container relative w-10 h-10" data-icon-url="${finalIconUrl}" data-site-name="${safeDataName}" data-initial="${cardInitial}">
+                    <div class="w-10 h-10 rounded-lg bg-primary-600 flex items-center justify-center text-white font-semibold text-lg shadow-inner logo-placeholder">${cardInitial}</div>
+                    <img alt="${safeName}" class="w-10 h-10 rounded-lg object-cover bg-gray-100 absolute top-0 left-0 opacity-0 logo-img" loading="lazy" onload="handleIconLoad(this)" onerror="handleIconError(this, '${cardInitial}')"/>
+                  </div>
+                `;
               } else {
-                // 如果都没有，使用首字母
+                // 没有图标，直接使用首字母
                 logoHTML = `<div class="w-10 h-10 rounded-lg bg-primary-600 flex items-center justify-center text-white font-semibold text-lg shadow-inner">${cardInitial}</div>`;
               }
               
               return `
                 <div class="site-card group bg-white border border-primary-100/60 rounded-xl shadow-sm hover:shadow-md hover:-translate-y-[2px] transition-all duration-200 overflow-hidden" data-id="${site.id}" data-name="${safeDataName}" data-url="${dataUrlAttr}" data-catalog="${safeDataCatalog}" data-desc="${safeDesc}">
                   <div class="p-5">
-                    <a href="${hrefValue}" ${hasValidUrl ? 'target="_blank" rel="noopener noreferrer"' : ''} class="block">
-                      <div class="flex items-start">
-                        <div class="flex-shrink-0 mr-4">
-                          ${logoHTML}
-                        </div>
-                        <div class="flex-1 min-w-0">
-                          <h3 class="text-base font-medium text-gray-900 truncate" title="${safeName}">${safeName}</h3>
-                          <span class="inline-flex items-center px-2 py-0.5 mt-1 rounded-full text-xs font-medium bg-secondary-100 text-primary-700">
-                            ${safeCatalog}
-                          </span>
-                        </div>
+                    <div class="flex items-start">
+                      <div class="flex-shrink-0 mr-4">
+                        ${logoHTML}
                       </div>
-                      
-                      <p class="mt-2 text-sm text-gray-600 leading-relaxed line-clamp-2" title="${safeDesc}">${safeDesc}</p>
-                    </a>
+                      <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2">
+                          <h3 class="text-base font-medium text-gray-900 truncate flex-1" title="${safeName}">${safeName}</h3>
+                          ${hasValidUrl ? `
+                          <button class="preview-btn p-1 rounded-full hover:bg-primary-100 text-primary-600 transition-colors" data-url="${dataUrlAttr}" data-name="${safeName}" title="在当前页面预览">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
+                            </svg>
+                          </button>
+                          ` : ''}
+                        </div>
+                        <span class="inline-flex items-center px-2 py-0.5 mt-1 rounded-full text-xs font-medium bg-secondary-100 text-primary-700">
+                          ${safeCatalog}
+                        </span>
+                      </div>
+                    </div>
+                    
+                    <p class="mt-2 text-sm text-gray-600 leading-relaxed line-clamp-2" title="${safeDesc}">${safeDesc}</p>
                     
                     <div class="mt-3 flex items-center justify-between">
-                      <span class="text-xs text-primary-600 truncate max-w-[140px]" title="${safeDisplayUrl}">${safeDisplayUrl}</span>
+                      <a href="${hrefValue}" ${hasValidUrl ? 'target="_blank" rel="noopener noreferrer"' : ''} class="text-xs text-primary-600 truncate max-w-[140px] hover:underline" title="${safeDisplayUrl}">${safeDisplayUrl}</a>
                       <button class="copy-btn relative flex items-center px-2 py-1 ${hasValidUrl ? 'bg-accent-100 text-accent-700 hover:bg-accent-200' : 'bg-gray-200 text-gray-400 cursor-not-allowed'} rounded-full text-xs font-medium transition-colors" data-url="${dataUrlAttr}" ${hasValidUrl ? '' : 'disabled'}>
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
@@ -2796,22 +2825,98 @@ async exportConfig(request, env, ctx) {
       </div>
       ` : ''}
       
+      <!-- 网站预览模态框 -->
+      <div id="previewModal" class="fixed inset-0 z-[60] flex flex-col bg-black bg-opacity-80 opacity-0 invisible transition-all duration-300">
+        <div class="flex items-center justify-between p-4 bg-white shadow-md">
+          <h2 id="previewTitle" class="text-lg font-semibold text-gray-900"></h2>
+          <div class="flex items-center gap-3">
+            <a id="previewExternalLink" href="#" target="_blank" rel="noopener noreferrer" class="text-primary-600 hover:text-primary-700 flex items-center gap-1 text-sm">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6h-6" />
+              </svg>
+              在新标签页打开
+            </a>
+            <button id="closePreview" class="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100">
+              <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="flex-1 p-2">
+          <iframe id="previewIframe" class="w-full h-full rounded-lg border-0 bg-white" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+        </div>
+      </div>
+      
       <script>
         // 全局配置
         const faviconApi = '${faviconApi}';
+        
+        // 图标加载成功处理函数
+        function handleIconLoad(img) {
+          img.classList.remove('opacity-0');
+          img.classList.add('opacity-100', 'transition-opacity', 'duration-300');
+        }
         
         // 图标错误处理函数
         function handleIconError(img, initial) {
           img.onerror = null;
           const parent = img.parentElement;
-          const siteName = img.dataset.siteName;
-          img.remove();
-          if (parent) {
-            parent.innerHTML = '<div class="w-10 h-10 rounded-lg bg-primary-600 flex items-center justify-center text-white font-semibold text-lg shadow-inner">' + initial + '</div>';
+          if (parent && parent.classList.contains('logo-container')) {
+            // 对于新的懒加载结构，隐藏 img 并保留占位符
+            img.style.display = 'none';
+          } else {
+            // 旧的处理逻辑
+            img.remove();
+            if (parent) {
+              parent.innerHTML = '<div class="w-10 h-10 rounded-lg bg-primary-600 flex items-center justify-center text-white font-semibold text-lg shadow-inner">' + initial + '</div>';
+            }
+          }
+        }
+        
+        // 图标懒加载初始化
+        function initLazyLoadIcons() {
+          const logoContainers = document.querySelectorAll('.logo-container');
+          
+          if ('IntersectionObserver' in window) {
+            const iconObserver = new IntersectionObserver((entries, observer) => {
+              entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                  const container = entry.target;
+                  const iconUrl = container.dataset.iconUrl;
+                  const img = container.querySelector('.logo-img');
+                  
+                  if (img && iconUrl) {
+                    img.src = iconUrl;
+                  }
+                  
+                  observer.unobserve(container);
+                }
+              });
+            }, {
+              rootMargin: '100px 0px', // 提前100px加载
+              threshold: 0.1
+            });
+            
+            logoContainers.forEach(container => {
+              iconObserver.observe(container);
+            });
+          } else {
+            // 不支持 IntersectionObserver 时降级为立即加载
+            logoContainers.forEach(container => {
+              const iconUrl = container.dataset.iconUrl;
+              const img = container.querySelector('.logo-img');
+              if (img && iconUrl) {
+                img.src = iconUrl;
+              }
+            });
           }
         }
         
         document.addEventListener('DOMContentLoaded', function() {
+          // 初始化图标懒加载
+          initLazyLoadIcons();
+          
           // 侧边栏控制
           const sidebar = document.getElementById('sidebar');
           const mobileOverlay = document.getElementById('mobileOverlay');
@@ -2997,6 +3102,64 @@ async exportConfig(request, env, ctx) {
               });
             });
           }
+          
+          // 网站预览功能
+          const previewModal = document.getElementById('previewModal');
+          const previewIframe = document.getElementById('previewIframe');
+          const previewTitle = document.getElementById('previewTitle');
+          const previewExternalLink = document.getElementById('previewExternalLink');
+          const closePreview = document.getElementById('closePreview');
+          
+          function openPreviewModal(url, name) {
+            if (previewModal && previewIframe && previewTitle && previewExternalLink) {
+              previewTitle.textContent = name;
+              previewExternalLink.href = url;
+              previewIframe.src = url;
+              previewModal.classList.remove('opacity-0', 'invisible');
+              document.body.style.overflow = 'hidden';
+            }
+          }
+          
+          function closePreviewModal() {
+            if (previewModal && previewIframe) {
+              previewModal.classList.add('opacity-0', 'invisible');
+              previewIframe.src = '';
+              document.body.style.overflow = '';
+            }
+          }
+          
+          // 为所有预览按钮添加点击事件
+          document.querySelectorAll('.preview-btn').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              const url = this.getAttribute('data-url');
+              const name = this.getAttribute('data-name');
+              if (url) {
+                openPreviewModal(url, name);
+              }
+            });
+          });
+          
+          if (closePreview) {
+            closePreview.addEventListener('click', closePreviewModal);
+          }
+          
+          // 点击模态框背景关闭
+          if (previewModal) {
+            previewModal.addEventListener('click', function(e) {
+              if (e.target === previewModal) {
+                closePreviewModal();
+              }
+            });
+          }
+          
+          // ESC 键关闭模态框
+          document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+              closePreviewModal();
+            }
+          });
           
           // 搜索功能
           const searchInput = document.getElementById('searchInput');
