@@ -856,7 +856,6 @@ async exportConfig(request, env, ctx) {
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>书签管理页面</title>
       <link rel="stylesheet" href="/static/admin.css">
-      <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap" rel="stylesheet">
       <script>
         // 全局配置
         const faviconApi = 'https://toolb.cn/favicon/{domain}';
@@ -2067,7 +2066,6 @@ async exportConfig(request, env, ctx) {
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>管理员登录</title>
-        <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
         <style>
           /* [优化] 全局重置与现代CSS最佳实践 */
           *, *::before, *::after {
@@ -2329,7 +2327,6 @@ async exportConfig(request, env, ctx) {
       <meta charset="UTF-8"/>
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <title>琪舟阁</title>
-      <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet"/>
       <link rel="icon" href="https://img.520jacky.dpdns.org/i/2026/03/06/057561.png" type="image/webp"/>
       <script src="https://cdn.tailwindcss.com"></script>
       <script>
