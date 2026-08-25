@@ -1340,7 +1340,8 @@ async exportConfig(request, env, ctx) {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>书签管理页面</title>
+      <title>书签管理</title>
+      <link rel="icon" href="https://img.520jacky.dpdns.org/i/2026/03/06/057561.png" type="image/webp"/>
       <link rel="stylesheet" href="/static/admin.css">
       <script>
         // 全局配置
@@ -1352,7 +1353,6 @@ async exportConfig(request, env, ctx) {
           <header class="admin-header">
             <div class="admin-header-left">
               <h1>书签管理</h1>
-              <p class="admin-subtitle">管理后台仅限受信任的管理员使用，请妥善保管账号</p>
             </div>
             <div class="admin-toolbar">
               <input type="file" id="importFile" accept=".json" style="display:none;">
@@ -1377,11 +1377,11 @@ async exportConfig(request, env, ctx) {
       
           <div id="message" style="display: none;padding:1rem;border-radius: 0.5rem;margin-bottom: 1rem;"></div>
           <div class="add-new form-collapsed" id="addNewForm" style="display:none;">
-            <input type="text" id="addName" placeholder="Name" required>
-            <input type="text" id="addUrl" placeholder="URL" required>
-            <input type="text" id="addLogo" placeholder="Logo(optional)">
-            <input type="text" id="addDesc" placeholder="Description(optional)">
-            <input type="text" id="addCatelog" placeholder="分类（用/分隔多级，如：工具/开发/前端）" required>
+            <input type="text" id="addName" placeholder="名称" required>
+            <input type="text" id="addUrl" placeholder="网址" required>
+            <input type="text" id="addLogo" placeholder="图标(可选)">
+            <input type="text" id="addDesc" placeholder="描述(可选)">
+            <input type="text" id="addCatelog" placeholder="分类（用/分隔多级）" required>
             <input type="number" id="addSortOrder" placeholder="排序 (数字小靠前)">
             <button id="addSubmitBtn">添加</button>
           </div>
@@ -1405,13 +1405,13 @@ async exportConfig(request, env, ctx) {
                         <table id="configTable">
                             <thead>
                                 <tr>
-                                  <th>Name</th>
-                                  <th>URL</th>
-                                  <th>Logo</th>
-                                  <th>Description</th>
-                                  <th>Catelog</th>
+                                  <th>名称</th>
+                                  <th>网址</th>
+                                  <th>图标</th>
+                                  <th>描述</th>
+                                  <th>分类</th>
                                   <th>排序</th>
-                                  <th>Actions</th>
+                                  <th>操作</th>
                                 </tr>
                             </thead>
                             <tbody id="configTableBody">
@@ -1593,11 +1593,6 @@ async exportConfig(request, env, ctx) {
         margin: 0;
         color: #2d3748;
         font-weight: 700;
-    }
-    .admin-subtitle {
-        margin: 4px 0 0;
-        color: #718096;
-        font-size: 0.88rem;
     }
     
     /* 工具栏图标按钮 */
@@ -2318,7 +2313,7 @@ async exportConfig(request, env, ctx) {
           // 添加搜索框
           const searchInput = document.createElement('input');
           searchInput.type = 'text';
-          searchInput.placeholder = '搜索书签(名称，URL，分类，描述)';
+          searchInput.placeholder = '搜索书签(名称，网址，分类，描述)';
           searchInput.id = 'searchInput';
           searchInput.className = 'search-input';
           searchInput.style.marginBottom = '12px';
@@ -2590,7 +2585,7 @@ async exportConfig(request, env, ctx) {
             const catelog = addCatelog.value;
             const sort_order = addSortOrder.value;
             if(!name || !url || !catelog) {
-              showMessage('名称,URL,分类 必填', 'error');
+              showMessage('名称,网址,分类 必填', 'error');
               return;
             }
             const payload = {
