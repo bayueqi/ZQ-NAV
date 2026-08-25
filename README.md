@@ -20,10 +20,9 @@
 - 📱 **响应式设计**：完美适配桌面、平板和手机等各种设备。
 - 🎨 **主题美观**：界面简洁优雅，支持自定义主色调。
 - 🔍 **快速搜索**：内置站内模糊搜索，迅速定位所需网站。
-- 📂 **分类清晰**：通过分类组织书签，浏览直观高效。
-- 🔒 **安全后台**：基于 KV 的管理员认证，提供完整的书签增删改查后台。
-- 📝 **用户提交**：支持访客提交书签，经管理员审核后显示。
-- ⚡ **性能卓越**：利用 Cloudflare 边缘缓存，实现秒级加载，并极大节省 D1 数据库读取成本。
+- 📂 **分类清晰**：支持多级分类树结构，浏览直观高效。
+- 🔒 **安全后台**：基于环境变量的管理员认证+D1会话管理，提供完整的书签增删改查后台。
+- ⚡ **性能卓越**：利用 Cloudflare 边缘计算，实现秒级加载。
 - 📤 **数据管理**：支持书签数据的导入与导出，格式兼容，方便迁移。
 
 
@@ -42,7 +41,7 @@
 
 ```sql
 -- 创建已发布网站表
-CREATE TABLE sites (
+CREATE TABLE IF NOT EXISTS sites (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 name TEXT NOT NULL,
 url TEXT NOT NULL,
@@ -55,31 +54,26 @@ create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
 update_time DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 创建待审核网站表
-CREATE TABLE pending_sites (
+-- 创建多级分类表（支持无限级子分类）
+CREATE TABLE IF NOT EXISTS categories (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 name TEXT NOT NULL,
-url TEXT NOT NULL,
-logo TEXT,
-"desc" TEXT,
-catelog TEXT NOT NULL,
-status TEXT,
-sort_order INTEGER NOT NULL DEFAULT 9999,
+parent_id INTEGER DEFAULT 0,
+path TEXT NOT NULL UNIQUE,
+sort_order INTEGER DEFAULT 0,
 create_time DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 创建管理员会话表（登录状态存储）
+CREATE TABLE IF NOT EXISTS admin_sessions (
+token TEXT PRIMARY KEY,
+created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+expires_at DATETIME NOT NULL
+);
 ```
-> **提示**: 使用 SQL 是最快捷的方式。如果你想手动建表，请确保字段名、类型与上述 SQL 一致。
+> **提示**: 使用 SQL 是最快捷的方式。加了 `IF NOT EXISTS` 可以安全重复执行。部署代码后首次访问页面，`categories` 和 `admin_sessions` 表也会被自动创建，不手动执行SQL也可以。
 
-### 步骤 2: 创建 KV 存储
-
-1.  在 Cloudflare 控制台，进入 `Workers & Pages` -> `KV`。
-2.  点击 `创建命名空间`，名称输入 `NAV_AUTH`。
-3.  创建后，为此 KV 添加两个条目，用于设置后台登录的 **用户名** 和 **密码**。
-    -   **admin_username**: 你的管理员用户名（例如 `admin`）
-    -   **admin_password**: 你的管理员密码
-
-
-### 步骤 3: 创建并部署 Worker
+### 步骤 2: 创建并部署 Worker
 
 1.  回到 `Workers & Pages`，点击 `创建应用程序` -> `创建 Worker`。
 2.  为你的 Worker 指定一个名称（例如 `my-nav`），然后点击 `部署`。
@@ -87,26 +81,26 @@ create_time DATETIME DEFAULT CURRENT_TIMESTAMP
 3.  部署后，点击 `编辑代码`。将本项目 `_worker.js` 文件中的所有代码复制并粘贴到编辑器中，替换掉原有内容。
 4.  点击 `部署` 保存代码。
 
-### 步骤 4: 绑定服务
+### 步骤 3: 绑定数据库与环境变量
 
 1.  进入你刚刚创建的 Worker 的 `设置` -> `变量`。
 2.  在 **D1 数据库绑定** 中，点击 `添加绑定`：
     -   变量名称: `NAV_DB`
     -   D1 数据库: 选择你创建的 `book`
-3.  在 **KV 命名空间绑定** 中，点击 `添加绑定`：
-    -   变量名称: `NAV_AUTH`
-    -   KV 命名空间: 选择你创建的 `NAV_AUTH`
-4.  （可选）在 **环境变量** 中，点击 `添加变量`，添加以下可选配置：
-    -   变量名称: `FaviconApi`
-    -   值: 自定义的图标API URL，例如 `https://toolb.cn/favicon/{domain}`
-    -   环境: 生产
-    -   加密: 否
+3.  在 **环境变量** 中，点击 `添加变量`，添加以下配置：
+
+    **必需配置：**
+    -   变量名称: `ADMIN_USERNAME`，值: 你的管理员用户名（例如 `admin`），需要加密.
+    -   变量名称: `ADMIN_PASSWORD`，值: 你的管理员密码，需要加密.
+
+    **可选配置：**
+    -   变量名称: `FaviconApi`，值: 自定义的图标API URL（例如 `https://toolb.cn/favicon/{domain}`），不加密.
     
     > **说明**: 如果不设置 `FaviconApi`，系统会默认使用 `https://toolb.cn/favicon/{domain}`
-### 步骤 5: 开始使用
+### 步骤 4: 开始使用
 
 1.  访问你的 Worker 域名（例如 `my-nav.your-subdomain.workers.dev`）。首次访问会提示没有数据。
-2.  访问 `你的域名/admin` 进入后台，使用你在 **步骤 2** 中设置的用户名和密码登录。
+2.  访问 `你的域名/admin` 进入后台，使用你在 **步骤 3** 中设置的 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 登录。
 3.  在后台添加第一个书签后，首页即可正常显示。
 
 
@@ -122,8 +116,7 @@ create_time DATETIME DEFAULT CURRENT_TIMESTAMP
 ## 🔧 技术栈
 
 -   **计算**: [Cloudflare Workers](https://workers.cloudflare.com/)
--   **数据库**: [Cloudflare D1](https://developers.cloudflare.com/d1/)
--   **存储**: [Cloudflare KV](https://developers.cloudflare.com/workers/runtime-apis/kv/)
+-   **数据库**: [Cloudflare D1](https://developers.cloudflare.com/d1/)（数据存储+会话管理）
 -   **前端框架**: [TailwindCSS](https://tailwindcss.com/)
 
 ## 🌟 贡献
