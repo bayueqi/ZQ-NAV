@@ -143,6 +143,8 @@ function normalizeSortOrder(value) {
 }
 
 // ========== 多级分类系统 ==========
+// 未选择/未填写分类时的兜底分类名
+const DEFAULT_CATALOG = '默认';
 async function ensureCategoriesTable(env) {
   try {
     await env.NAV_DB.prepare(`
@@ -315,21 +317,28 @@ async function cleanupOrphanCategories(env) {
 }
 
 // 同步分类路径：确保路径中每一级分类都存在于 categories 表中
+// 当某父级第一次获得子分类时，把原先直挂该父级的书签自动迁到 父级/默认
 async function syncCategoryPath(env, catelogPath) {
   if (!catelogPath) return;
   const path = (catelogPath || '').trim();
   if (!path) return;
   const parts = path.split('/').map(p => p.trim()).filter(p => p);
   if (parts.length === 0) return;
-  
+
   let currentParentId = 0;
   let currentPath = '';
-  for (const part of parts) {
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    const parentPath = currentPath; // 加上本段前的路径 = 父级路径
     currentPath = currentPath ? currentPath + '/' + part : part;
     const existing = await env.NAV_DB.prepare('SELECT id FROM categories WHERE path = ?').bind(currentPath).first();
     if (existing) {
       currentParentId = existing.id;
     } else {
+      // 即将为父级（路径 parentPath）创建子分类；若是父级的第一个子分类，迁移父级直挂书签到 父级/默认
+      if (i > 0 && parentPath) {
+        await migrateDirectBookmarksToDefault(env, parentPath, currentParentId, part);
+      }
       // 获取同级最大sort_order + 1
       const maxSort = await env.NAV_DB.prepare(
         'SELECT MAX(sort_order) as max_sort FROM categories WHERE parent_id = ?'
@@ -341,6 +350,28 @@ async function syncCategoryPath(env, catelogPath) {
       currentParentId = result.meta.last_row_id;
     }
   }
+}
+
+// 父级首次出现子分类时，把直挂父级（catelog === parentPath）的书签迁移到 父级/默认
+async function migrateDirectBookmarksToDefault(env, parentPath, parentId, creatingPart) {
+  // 仅当父级目前没有任何子分类时触发（这是第一个子分类）
+  const cc = await env.NAV_DB.prepare('SELECT COUNT(*) as cnt FROM categories WHERE parent_id = ?').bind(parentId).first();
+  if (!cc || cc.cnt > 0) return;
+  // 父级是否有直挂书签
+  const direct = await env.NAV_DB.prepare('SELECT id FROM sites WHERE catelog = ? LIMIT 1').bind(parentPath).first();
+  if (!direct) return;
+  const defaultPath = parentPath + '/默认';
+  // 确保"默认"子分类节点存在；若正在创建的就是"默认"则由调用方插入，此处跳过
+  if (creatingPart !== '默认') {
+    const exist = await env.NAV_DB.prepare('SELECT id FROM categories WHERE path = ?').bind(defaultPath).first();
+    if (!exist) {
+      const ms = await env.NAV_DB.prepare('SELECT MAX(sort_order) as m FROM categories WHERE parent_id = ?').bind(parentId).first();
+      const so = (ms && ms.m !== null) ? ms.m + 1 : 0;
+      await env.NAV_DB.prepare('INSERT INTO categories (name, parent_id, path, sort_order) VALUES (?, ?, ?, ?)').bind('默认', parentId, defaultPath, so).run();
+    }
+  }
+  // 迁移直挂书签到 父级/默认
+  await env.NAV_DB.prepare('UPDATE sites SET catelog = ? WHERE catelog = ?').bind(defaultPath, parentPath).run();
 }
 
 function isSubmissionEnabled(env) {
@@ -653,6 +684,8 @@ async function isAdminAuthenticated(request, env) {
                     return this.errorResponse('Pending config not found', 404);
                 }
                 const config = results[0];
+                // 兜底：审核入库时若分类为空则使用默认分类
+                const approvedCatelog = (config.catelog && config.catelog.trim()) ? config.catelog.trim() : DEFAULT_CATALOG;
                 let targetSortOrder = 1;
                 if (!config.sort_order || config.sort_order === '' || config.sort_order === 9999) {
                     const maxSortResult = await env.NAV_DB.prepare('SELECT MAX(sort_order) as max_sort FROM sites WHERE sort_order != 9999').first();
@@ -664,8 +697,11 @@ async function isAdminAuthenticated(request, env) {
                 await env.NAV_DB.prepare(`
                     INSERT INTO sites (name, url, desc, logo, catelog, sort_order)
                     VALUES (?, ?, ?, ?, ?, ?)
-                `).bind(config.name, config.url, config.desc, config.logo, config.catelog, targetSortOrder).run();
+                `).bind(config.name, config.url, config.desc, config.logo, approvedCatelog, targetSortOrder).run();
                 await env.NAV_DB.prepare('DELETE FROM pending_sites WHERE id = ?').bind(id).run();
+                // 同步分类路径并清理空分类
+                await syncCategoryPath(env, approvedCatelog);
+                await cleanupOrphanCategories(env);
                 return new Response(JSON.stringify({
                     code: 200,
                     message: 'Pending config approved successfully'
@@ -698,12 +734,12 @@ async function isAdminAuthenticated(request, env) {
               const { name, url, logo, desc, catelog } = config;
               const sanitizedName = (name || '').trim();
               const sanitizedUrl = (url || '').trim();
-              const sanitizedCatelog = (catelog || '').trim();
+              const sanitizedCatelog = (catelog || '').trim() || DEFAULT_CATALOG;
               const sanitizedLogo = (logo || '').trim() || null;
               const sanitizedDesc = (desc || '').trim() || null;
-  
-              if (!sanitizedName || !sanitizedUrl || !sanitizedCatelog ) {
-                  return this.errorResponse('Name, URL and Catelog are required', 400);
+
+              if (!sanitizedName || !sanitizedUrl) {
+                  return this.errorResponse('Name and URL are required', 400);
               }
               await env.NAV_DB.prepare(`
                   INSERT INTO pending_sites (name, url, logo, desc, catelog)
@@ -729,12 +765,12 @@ async function isAdminAuthenticated(request, env) {
               const { name, url, logo, desc, catelog, sort_order } = config;
               const sanitizedName = (name || '').trim();
               const sanitizedUrl = (url || '').trim();
-              const sanitizedCatelog = (catelog || '').trim();
+              const sanitizedCatelog = (catelog || '').trim() || DEFAULT_CATALOG;
               const sanitizedLogo = (logo || '').trim() || null;
               const sanitizedDesc = (desc || '').trim() || null;
 
-              if (!sanitizedName || !sanitizedUrl || !sanitizedCatelog ) {
-                  return this.errorResponse('Name, URL and Catelog are required', 400);
+              if (!sanitizedName || !sanitizedUrl) {
+                  return this.errorResponse('Name and URL are required', 400);
               }
               
               let targetSortOrder = 1;
@@ -775,12 +811,12 @@ async function isAdminAuthenticated(request, env) {
               const { name, url, logo, desc, catelog, sort_order } = config;
               const sanitizedName = (name || '').trim();
               const sanitizedUrl = (url || '').trim();
-              const sanitizedCatelog = (catelog || '').trim();
+              const sanitizedCatelog = (catelog || '').trim() || DEFAULT_CATALOG;
               const sanitizedLogo = (logo || '').trim() || null;
               const sanitizedDesc = (desc || '').trim() || null;
 
-            if (!sanitizedName || !sanitizedUrl || !sanitizedCatelog) {
-              return this.errorResponse('Name, URL and Catelog are required', 400);
+            if (!sanitizedName || !sanitizedUrl) {
+                return this.errorResponse('Name and URL are required', 400);
             }
             
             let targetSortOrder = 9999;
@@ -1376,14 +1412,27 @@ async exportConfig(request, env, ctx) {
           </header>
       
           <div id="message" style="display: none;padding:1rem;border-radius: 0.5rem;margin-bottom: 1rem;"></div>
-          <div class="add-new form-collapsed" id="addNewForm" style="display:none;">
-            <input type="text" id="addName" placeholder="名称" required>
-            <input type="text" id="addUrl" placeholder="网址" required>
-            <input type="text" id="addLogo" placeholder="图标(可选)">
-            <input type="text" id="addDesc" placeholder="描述(可选)">
-            <input type="text" id="addCatelog" placeholder="分类（用/分隔多级）" required>
-            <input type="number" id="addSortOrder" placeholder="排序 (数字小靠前)">
-            <button id="addSubmitBtn">添加</button>
+          <div class="modal" id="addModal" style="display:none;">
+            <div class="modal-content">
+              <span class="modal-close" id="addModalClose">×</span>
+              <h2>添加站点</h2>
+              <form id="addForm">
+                <label for="addName">名称:</label>
+                <input type="text" id="addName" placeholder="名称" required>
+                <label for="addUrl">网址:</label>
+                <input type="text" id="addUrl" placeholder="网址" required>
+                <label for="addLogo">图标(可选):</label>
+                <input type="text" id="addLogo" placeholder="图标(可选)">
+                <label for="addDesc">描述(可选):</label>
+                <input type="text" id="addDesc" placeholder="描述(可选)">
+                <label for="addCatelog">分类:</label>
+                <input type="hidden" id="addCatelog">
+                <div id="addCatelogCascader" class="cascader-host"></div>
+                <label for="addSortOrder">排序:</label>
+                <input type="number" id="addSortOrder" placeholder="数字小靠前 (可选)">
+                <button type="submit">添加</button>
+              </form>
+            </div>
           </div>
          <div id="config">
                     <div class="config-layout">
@@ -1418,12 +1467,12 @@ async exportConfig(request, env, ctx) {
                               <!-- data render by js -->
                             </tbody>
                         </table>
+                   </div>
                         <div class="pagination">
                               <button id="prevPage" disabled>上一页</button>
                               <span id="currentPage">1</span>/<span id="totalPages">1</span>
                               <button id="nextPage" disabled>下一页</button>
                         </div>
-                   </div>
                       </div>
                     </div>
                 </div>
@@ -1725,6 +1774,87 @@ async exportConfig(request, env, ctx) {
         box-shadow: 0 0 0 3px rgba(65, 109, 157, 0.12);
         background: #fff;
     }
+
+    /* 级联分类选择器 */
+    .cascader-host { width: 100%; }
+    .cascader-wrap {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+      padding: 8px 10px;
+      background: rgba(255,255,255,0.7);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      min-height: 42px;
+      transition: all 0.2s ease;
+    }
+    .cascader-wrap:focus-within {
+      border-color: #416d9d;
+      box-shadow: 0 0 0 3px rgba(65,109,157,0.12);
+      background: rgba(255,255,255,0.9);
+    }
+    .cascader-wrap select,
+    .cascader-wrap input {
+      padding: 7px 10px !important;
+      margin: 0 !important;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      background: rgba(255,255,255,0.9);
+      outline: none;
+      transition: all 0.2s ease;
+      max-width: 200px;
+      color: #334155;
+    }
+    .cascader-wrap select:focus,
+    .cascader-wrap input:focus {
+      border-color: #416d9d;
+      box-shadow: 0 0 0 3px rgba(65,109,157,0.12);
+      background: #fff;
+    }
+    .cascader-level {
+      border-color: #c3d0e3 !important;
+      background: rgba(232,238,247,0.9) !important;
+      font-weight: 500;
+    }
+    .cascader-picker {
+      border-style: dashed !important;
+      color: #416d9d;
+    }
+    .cascader-sep { color: #94a3b8; font-size: 0.85rem; padding: 0 2px; }
+    .cascader-remove {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      background: rgba(229,62,62,0.12);
+      color: #e53e3e;
+      cursor: pointer;
+      font-size: 14px; line-height: 1;
+      transition: all 0.2s ease;
+      margin-right: 2px;
+      user-select: none;
+    }
+    .cascader-remove:hover {
+      background: rgba(229,62,62,0.28);
+      transform: scale(1.12);
+    }
+    .cascader-ok {
+      padding: 7px 12px !important;
+      margin: 0 !important;
+      background: linear-gradient(135deg,#48bb78,#38a169) !important;
+      border-radius: 8px !important;
+      font-size: 0.82rem !important;
+      box-shadow: 0 2px 6px rgba(72,187,120,0.3);
+    }
+    .cascader-ok:hover { filter: brightness(1.05); transform: translateY(-1px); }
+    .cascader-path {
+      margin-top: 6px;
+      font-size: 0.8rem;
+      color: #64748b;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .cascader-path-label { font-weight: 600; color: #416d9d; }
+    .cascader-path-value { color: #475569; word-break: break-all; }
     button {
         background: linear-gradient(135deg, #416d9d, #305580);
         color: #fff;
@@ -1741,8 +1871,10 @@ async exportConfig(request, env, ctx) {
         transform: translateY(-1px);
     }
     .table-wrapper {
-        overflow-x: auto;
+        overflow: auto;
         border-radius: 12px;
+        flex: 1 1 auto;
+        min-height: 0;
     }
     table {
         width: 100%;
@@ -1781,11 +1913,12 @@ async exportConfig(request, env, ctx) {
     }
     .pagination {
         text-align: center;
-        margin-top: 16px;
+        margin-top: 12px;
         display: flex;
         align-items: center;
         justify-content: center;
         gap: 8px;
+        flex: 0 0 auto;
     }
     .pagination button {
         margin: 0;
@@ -1827,7 +1960,8 @@ async exportConfig(request, env, ctx) {
     .config-layout {
         display: flex;
         gap: 16px;
-        min-height: 400px;
+        height: calc(100vh - 170px);
+        min-height: 440px;
     }
     .category-sidebar {
         flex: 0 0 220px;
@@ -1838,7 +1972,7 @@ async exportConfig(request, env, ctx) {
         padding: 14px;
         border: 1px solid rgba(226, 232, 240, 0.5);
         overflow-y: auto;
-        max-height: 600px;
+        max-height: none;
     }
     .category-sidebar-header {
         display: flex;
@@ -1987,6 +2121,9 @@ async exportConfig(request, env, ctx) {
     .config-main {
         flex: 1;
         min-width: 0;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
     }
     /* 操作按钮 */
     .actions {
@@ -2017,6 +2154,8 @@ async exportConfig(request, env, ctx) {
     @media (max-width: 768px) {
         .config-layout {
             flex-direction: column;
+            height: auto;
+            min-height: 0;
         }
         .category-sidebar {
             flex: none;
@@ -2058,8 +2197,9 @@ async exportConfig(request, env, ctx) {
           };
           
           const addBtn = document.getElementById('addBtn');
-          const addNewForm = document.getElementById('addNewForm');
-          const addSubmitBtn = document.getElementById('addSubmitBtn');
+          const addModal = document.getElementById('addModal');
+          const addModalClose = document.getElementById('addModalClose');
+          const addForm = document.getElementById('addForm');
           const addName = document.getElementById('addName');
           const addUrl = document.getElementById('addUrl');
           const addLogo = document.getElementById('addLogo');
@@ -2220,22 +2360,189 @@ async exportConfig(request, env, ctx) {
             }).catch(() => showMessage('网络错误', 'error'));
           }
 
+          // 级联分类选择器：从全局 categoryTree 渲染多级下拉，产出 "/" 分隔的路径
+          function createCascader(container, hiddenInput, initialPath) {
+            if (!container) return null;
+            const state = {
+              chosen: [],          // { name, isNew, node }
+              pickerMode: 'select',// 'select' | 'input'
+              pickerInput: ''
+            };
+
+            function findNode(children, name) {
+              return (children || []).find(function(c){ return c.name === name; }) || null;
+            }
+            function parentChildren() {
+              if (state.chosen.length === 0) return categoryTree || [];
+              const last = state.chosen[state.chosen.length - 1];
+              return (last && last.node && last.node.children) ? last.node.children : [];
+            }
+            function siblingsAt(idx) {
+              if (idx === 0) return categoryTree || [];
+              const parent = state.chosen[idx - 1];
+              return (parent && parent.node && parent.node.children) ? parent.node.children : [];
+            }
+            function path() {
+              return state.chosen.map(function(c){ return c.name; }).filter(Boolean).join('/');
+            }
+            function sync() {
+              if (hiddenInput) hiddenInput.value = path();
+              const v = container.querySelector('.cascader-path-value');
+              if (v) v.textContent = effectivePath() || '未选择';
+            }
+            // 实际归类路径：未选任何分类→"默认"；停在【有子分类】的某级→追加"/默认"；停在叶子级→不加
+            function effectivePath() {
+              const p = path();
+              if (!p) return '默认';
+              const last = state.chosen[state.chosen.length - 1];
+              const hasChildren = last && last.node && last.node.children && last.node.children.length > 0;
+              return hasChildren ? p + '/默认' : p;
+            }
+
+            function initFromPath(p) {
+              state.chosen = [];
+              state.pickerMode = 'select';
+              state.pickerInput = '';
+              if (!p) { render(); sync(); return; }
+              const parts = String(p).split('/').map(function(s){ return s.trim(); }).filter(Boolean);
+              let cursor = categoryTree || [];
+              for (const part of parts) {
+                const node = findNode(cursor, part);
+                state.chosen.push({ name: part, isNew: !node, node: node || null });
+                cursor = node ? node.children : [];
+              }
+              render(); sync();
+            }
+
+            function render() {
+              container.innerHTML = '';
+              const wrap = document.createElement('div');
+              wrap.className = 'cascader-wrap';
+
+              state.chosen.forEach(function(lvl, idx) {
+                if (idx > 0) {
+                  const sep = document.createElement('span');
+                  sep.className = 'cascader-sep'; sep.textContent = '/';
+                  wrap.appendChild(sep);
+                }
+                const sel = document.createElement('select');
+                sel.className = 'cascader-level';
+                sel.appendChild(new Option(lvl.name, lvl.name, true, true));
+                siblingsAt(idx).forEach(function(s) {
+                  if (s.name !== lvl.name) sel.appendChild(new Option(s.name, s.name));
+                });
+                sel.appendChild(new Option('✎ 改为新建', '__new__'));
+                sel.addEventListener('change', function() {
+                  const v = sel.value;
+                  if (v === '__new__') {
+                    state.chosen = state.chosen.slice(0, idx);
+                    state.pickerMode = 'input'; state.pickerInput = '';
+                    render();
+                    const inp = container.querySelector('.cascader-input');
+                    if (inp) inp.focus();
+                  } else if (v) {
+                    const sibs = siblingsAt(idx);
+                    const node = findNode(sibs, v);
+                    state.chosen = state.chosen.slice(0, idx);
+                    state.chosen.push({ name: v, isNew: false, node: node });
+                    state.pickerMode = 'select';
+                    render();
+                  }
+                  sync();
+                });
+                wrap.appendChild(sel);
+
+                const rm = document.createElement('span');
+                rm.className = 'cascader-remove'; rm.textContent = '×'; rm.title = '删除该级及更深';
+                rm.addEventListener('click', function() {
+                  state.chosen = state.chosen.slice(0, idx);
+                  state.pickerMode = 'select';
+                  render(); sync();
+                });
+                wrap.appendChild(rm);
+              });
+
+              if (state.pickerMode === 'select') {
+                const picker = document.createElement('select');
+                picker.className = 'cascader-picker';
+                const ph = new Option(state.chosen.length === 0 ? '选择一级分类…' : '选择子分类（或者默认）…', '', true, true);
+                ph.disabled = true; ph.hidden = true;
+                picker.appendChild(ph);
+                parentChildren().forEach(function(c) {
+                  const cnt = (typeof c.site_count === 'number') ? ' (' + c.site_count + ')' : '';
+                  picker.appendChild(new Option(c.name + cnt, c.name));
+                });
+                picker.appendChild(new Option('＋ 新建分类…', '__new__'));
+                picker.addEventListener('change', function() {
+                  const v = picker.value;
+                  if (v === '__new__') {
+                    state.pickerMode = 'input'; state.pickerInput = '';
+                    render();
+                    const inp = container.querySelector('.cascader-input');
+                    if (inp) inp.focus();
+                  } else if (v) {
+                    const children = parentChildren();
+                    const node = findNode(children, v);
+                    state.chosen.push({ name: v, isNew: false, node: node });
+                    render();
+                  }
+                  sync();
+                });
+                wrap.appendChild(picker);
+              } else {
+                const inp = document.createElement('input');
+                inp.type = 'text'; inp.className = 'cascader-input';
+                inp.placeholder = '输入新分类名…'; inp.value = state.pickerInput;
+                inp.addEventListener('input', function() { state.pickerInput = inp.value; });
+                inp.addEventListener('keydown', function(e) {
+                  if (e.key === 'Enter') { e.preventDefault(); confirmNew(); }
+                  else if (e.key === 'Escape') { state.pickerMode = 'select'; state.pickerInput = ''; render(); }
+                });
+                function confirmNew() {
+                  const name = (state.pickerInput || '').trim();
+                  if (!name) return;
+                  state.chosen.push({ name: name, isNew: true, node: null });
+                  state.pickerMode = 'select'; state.pickerInput = '';
+                  render(); sync();
+                  const next = container.querySelector('.cascader-picker') || container.querySelector('.cascader-input');
+                  if (next) next.focus();
+                }
+                const ok = document.createElement('button');
+                ok.type = 'button'; ok.className = 'cascader-ok'; ok.textContent = '✓ 确定'; ok.title = '确认新建';
+                ok.addEventListener('click', confirmNew);
+                wrap.appendChild(inp);
+                wrap.appendChild(ok);
+              }
+              container.appendChild(wrap);
+
+              const prev = document.createElement('div');
+              prev.className = 'cascader-path';
+              const val = document.createElement('span'); val.className = 'cascader-path-value'; val.textContent = path() || '未选择';
+              prev.appendChild(val);
+              container.appendChild(prev);
+            }
+
+            function refresh() {
+              let cursor = categoryTree || [];
+              for (const lvl of state.chosen) {
+                if (lvl.isNew) { cursor = []; continue; }
+                const node = findNode(cursor, lvl.name);
+                lvl.node = node || null;
+                cursor = node ? node.children : [];
+              }
+              render(); sync();
+            }
+
+            initFromPath(initialPath);
+            return { setPath: initFromPath, refresh: refresh, getPath: path, getEffectivePath: effectivePath };
+          }
+
+          // 分类数据刷新后同步级联选择器
+          let addCatelogCascader = null;
+          let editCatelogCascader = null;
           function updateCatelogDatalist() {
-            // 更新添加表单和编辑表单中可选的分类列表
-            let dataList = document.getElementById('catOptions');
-            if (!dataList) {
-              dataList = document.createElement('datalist');
-              dataList.id = 'catOptions';
-              document.body.appendChild(dataList);
-            }
-            dataList.innerHTML = flatCategories.map(c => '<option value="' + escapeHTML(c.path) + '">' + escapeHTML(c.path) + '</option>').join('');
-            if (addCatelog) {
-              addCatelog.setAttribute('list', 'catOptions');
-            }
-            const editCatelog = document.getElementById('editCatelog');
-            if (editCatelog) {
-              editCatelog.setAttribute('list', 'catOptions');
-            }
+            if (addCatelogCascader) addCatelogCascader.refresh();
+            if (editCatelogCascader) editCatelogCascader.refresh();
           }
 
           function selectCategory(category) {
@@ -2352,8 +2659,9 @@ async exportConfig(request, env, ctx) {
                 <input type="text" id="editLogo"><br>
                 <label for="editDesc">描述(可选):</label>
                 <input type="text" id="editDesc"><br>
-                <label for="editCatelog">分类（用/分隔多级）:</label>
-                <input type="text" id="editCatelog" placeholder="如：工具/开发/前端" required><br>
+                <label for="editCatelog">分类:</label>
+                <input type="hidden" id="editCatelog">
+                <div id="editCatelogCascader" class="cascader-host"></div><br>
 			    <label for="editSortOrder">排序:</label> <!-- [新增] -->
                 <input type="number" id="editSortOrder"><br> <!-- [新增] -->
                 <button type="submit">保存</button>
@@ -2375,7 +2683,9 @@ async exportConfig(request, env, ctx) {
             const url = document.getElementById('editUrl').value;
             const logo = document.getElementById('editLogo').value;
             const desc = document.getElementById('editDesc').value;
-            const catelog = document.getElementById('editCatelog').value;
+            // 实际归类：未选→默认；停在有子分类的某级→当前级/默认
+            const editCatelogEl = document.getElementById('editCatelog');
+            const catelog = editCatelogCascader ? editCatelogCascader.getEffectivePath() : ((editCatelogEl.value || '').trim() || '默认');
                 const sort_order = document.getElementById('editSortOrder').value; // [新增]
             const payload = {
                 name: name.trim(),
@@ -2515,6 +2825,12 @@ async exportConfig(request, env, ctx) {
                 document.getElementById('editLogo').value = configToEdit.logo || '';
                 document.getElementById('editDesc').value = configToEdit.desc || '';
                 document.getElementById('editCatelog').value = configToEdit.catelog;
+                if (editCatelogCascader) {
+                  // 回填：存的就是实际归到的路径；唯有未选分类存的"默认"回填为空
+                  let sel = (configToEdit.catelog || '').trim();
+                  if (sel === '默认') sel = '';
+                  editCatelogCascader.setPath(sel);
+                }
                 document.getElementById('editSortOrder').value = configToEdit.sort_order === 9999 ? '' : configToEdit.sort_order; // [新增]
                 editModal.style.display = 'block';
             });
@@ -2560,21 +2876,37 @@ async exportConfig(request, env, ctx) {
               fetchConfigs(currentPage + 1);
             }
           });
-          
-          // 添加按钮：切换表单显示/隐藏
-          addBtn.addEventListener('click', () => {
-            const isHidden = addNewForm.classList.contains('form-collapsed');
-            if (isHidden) {
-              addNewForm.classList.remove('form-collapsed');
-              addNewForm.style.display = '';
-              requestAnimationFrame(() => {
-                addName.focus();
-              });
-            } else {
-              addNewForm.classList.add('form-collapsed');
-              addNewForm.style.display = 'none';
-            }
-          });
+
+          // 打开添加弹窗
+          function openAddModal() {
+            addName.value = '';
+            addUrl.value = '';
+            addLogo.value = '';
+            addDesc.value = '';
+            addCatelog.value = '';
+            addSortOrder.value = '';
+            if (addCatelogCascader) addCatelogCascader.setPath('');
+            addModal.style.display = 'block';
+            requestAnimationFrame(() => addName.focus());
+          }
+          function closeAddModal() {
+            addModal.style.display = 'none';
+          }
+          addBtn.addEventListener('click', openAddModal);
+          if (addModalClose) addModalClose.addEventListener('click', closeAddModal);
+          // 点击遮罩关闭
+          if (addModal) {
+            addModal.addEventListener('click', function(e) {
+              if (e.target === addModal) closeAddModal();
+            });
+          }
+          // 提交添加（表单 submit）
+          if (addForm) {
+            addForm.addEventListener('submit', function(e) {
+              e.preventDefault();
+              submitAddBookmark();
+            });
+          }
 
           // 提交添加
           function submitAddBookmark() {
@@ -2582,10 +2914,11 @@ async exportConfig(request, env, ctx) {
             const url = addUrl.value;
             const logo = addLogo.value;
             const desc = addDesc.value;
-            const catelog = addCatelog.value;
+            // 实际归类：未选→默认；停在有子分类的某级→当前级/默认
+            const catelog = addCatelogCascader ? addCatelogCascader.getEffectivePath() : ((addCatelog.value || '').trim() || '默认');
             const sort_order = addSortOrder.value;
-            if(!name || !url || !catelog) {
-              showMessage('名称,网址,分类 必填', 'error');
+            if(!name || !url) {
+              showMessage('名称,网址 必填', 'error');
               return;
             }
             const payload = {
@@ -2608,14 +2941,7 @@ async exportConfig(request, env, ctx) {
             .then(data => {
               if(data.code === 201) {
                 showMessage('添加成功', 'success');
-                addName.value = '';
-                addUrl.value = '';
-                addLogo.value = '';
-                addDesc.value = '';
-                addCatelog.value = '';
-                addSortOrder.value = '';
-                addNewForm.classList.add('form-collapsed');
-                addNewForm.style.display = 'none';
+                closeAddModal();
                 fetchConfigs();
                 loadCategorySidebar();
               } else {
@@ -2625,7 +2951,6 @@ async exportConfig(request, env, ctx) {
               showMessage('网络错误', 'error');
             })
           }
-          addSubmitBtn.addEventListener('click', submitAddBookmark);
           
           importBtn.addEventListener('click', () => {
           importFile.click();
@@ -2686,8 +3011,20 @@ async exportConfig(request, env, ctx) {
               currentPage = 1; // 搜索时重置为第一页
               fetchConfigs(currentPage,currentSearchKeyword);
           });
-          
-          
+
+
+          // 初始化级联分类选择器
+          addCatelogCascader = createCascader(
+            document.getElementById('addCatelogCascader'),
+            document.getElementById('addCatelog'),
+            ''
+          );
+          editCatelogCascader = createCascader(
+            document.getElementById('editCatelogCascader'),
+            document.getElementById('editCatelog'),
+            ''
+          );
+
           fetchConfigs();
           loadCategorySidebar();
           
