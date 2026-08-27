@@ -935,6 +935,8 @@ async function isAdminAuthenticated(request, env) {
           for (const cat of catelogSet) {
             await syncCategoryPath(env, cat);
           }
+          // 导入可能清空某些旧分类，清理孤儿
+          await cleanupOrphanCategories(env);
 
           return new Response(JSON.stringify({
               code: 201,
@@ -965,9 +967,7 @@ async exportConfig(request, env, ctx) {
       },
       async getCategories(request, env, ctx) {
           try {
-              // 先清理数据库中的孤儿分类（没有书签且没有子分类的空分类）
-              await cleanupOrphanCategories(env);
-
+              // 注意：孤儿分类的清理在写操作（增删改/导入/审核）中已统一进行，读取时不再重复清理
               // 获取所有分类
               const { results: categories } = await env.NAV_DB.prepare(
                 'SELECT id, name, parent_id, path, sort_order FROM categories ORDER BY sort_order ASC, id ASC'
@@ -1720,44 +1720,9 @@ async exportConfig(request, env, ctx) {
         background: rgba(255,255,255,0.4);
     }
     
-    .add-new {
-        display: flex;
-        gap: 10px;
-        margin-bottom: 20px;
-        flex-wrap: wrap;
-        padding: 16px;
-        background: rgba(247, 250, 252, 0.8);
-        border-radius: 14px;
-        border: 1px solid rgba(226, 232, 240, 0.6);
-        animation: slideDown 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-    }
     @keyframes slideDown {
         from { opacity: 0; transform: translateY(-12px); }
         to { opacity: 1; transform: translateY(0); }
-    }
-    .add-new > input {
-        flex: 1 1 140px;
-        min-width: 140px;
-        border-radius: 10px !important;
-        padding: 10px 14px !important;
-    }
-    .add-new > button {
-        flex-basis: 100%;
-        background: linear-gradient(135deg, #48bb78, #38a169) !important;
-        border-radius: 10px !important;
-        font-weight: 600 !important;
-        box-shadow: 0 2px 8px rgba(72, 187, 120, 0.3);
-        transition: all 0.25s ease !important;
-    }
-    .add-new > button:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(72, 187, 120, 0.4);
-        filter: brightness(1.05);
-    }
-    @media (min-width: 768px) {
-        .add-new > button {
-            flex-basis: auto;
-        }
     }
  input[type="text"], input[type="number"] {
         padding: 10px 14px;
@@ -2793,47 +2758,39 @@ async exportConfig(request, env, ctx) {
             bindActionEvents();
           }
           
+          // 事件委托：仅在首次渲染时绑定一次，后续重渲染无需重复绑定
           function bindActionEvents() {
-           document.querySelectorAll('.edit-btn').forEach(btn => {
-                btn.addEventListener('click', function() {
-                    const id = this.dataset.id;
-                    handleEdit(id);
-                })
-           });
-          
-          document.querySelectorAll('.del-btn').forEach(btn => {
-               btn.addEventListener('click', function() {
-                  const id = this.dataset.id;
-                   handleDelete(id)
-               })
-          })
+            if (configTableBody.__actionDelegated) return;
+            configTableBody.__actionDelegated = true;
+            configTableBody.addEventListener('click', function(e) {
+              const editBtn = e.target.closest('.edit-btn');
+              if (editBtn) { handleEdit(editBtn.dataset.id); return; }
+              const delBtn = e.target.closest('.del-btn');
+              if (delBtn) { handleDelete(delBtn.dataset.id); return; }
+            });
          }
 
-    // [优化] 点击编辑时，获取并填充排序字段
+    // 点击编辑：直接用当前页已加载的 allConfigs 取目标数据，无需再请求
           function handleEdit(id) {
-            fetch(\`/api/config?page=1&pageSize=1000\`) // A simple way to get all configs to find the one to edit
-            .then(res => res.json())
-            .then(data => {
-                const configToEdit = data.data.find(c => c.id == id);
-                if (!configToEdit) {
-                    showMessage('找不到要编辑的数据', 'error');
-                    return;
-                }
-                document.getElementById('editId').value = configToEdit.id;
-                document.getElementById('editName').value = configToEdit.name;
-                document.getElementById('editUrl').value = configToEdit.url;
-                document.getElementById('editLogo').value = configToEdit.logo || '';
-                document.getElementById('editDesc').value = configToEdit.desc || '';
-                document.getElementById('editCatelog').value = configToEdit.catelog;
-                if (editCatelogCascader) {
-                  // 回填：存的就是实际归到的路径；唯有未选分类存的"默认"回填为空
-                  let sel = (configToEdit.catelog || '').trim();
-                  if (sel === '默认') sel = '';
-                  editCatelogCascader.setPath(sel);
-                }
-                document.getElementById('editSortOrder').value = configToEdit.sort_order === 9999 ? '' : configToEdit.sort_order; // [新增]
-                editModal.style.display = 'block';
-            });
+            const configToEdit = allConfigs.find(c => c.id == id);
+            if (!configToEdit) {
+                showMessage('找不到要编辑的数据', 'error');
+                return;
+            }
+            document.getElementById('editId').value = configToEdit.id;
+            document.getElementById('editName').value = configToEdit.name;
+            document.getElementById('editUrl').value = configToEdit.url;
+            document.getElementById('editLogo').value = configToEdit.logo || '';
+            document.getElementById('editDesc').value = configToEdit.desc || '';
+            document.getElementById('editCatelog').value = configToEdit.catelog;
+            if (editCatelogCascader) {
+              // 回填：存的就是实际归到的路径；唯有未选分类存的"默认"回填为空
+              let sel = (configToEdit.catelog || '').trim();
+              if (sel === '默认') sel = '';
+              editCatelogCascader.setPath(sel);
+            }
+            document.getElementById('editSortOrder').value = configToEdit.sort_order === 9999 ? '' : configToEdit.sort_order;
+            editModal.style.display = 'block';
           }
           function handleDelete(id) {
             if(!confirm('确认删除？')) return;
@@ -3303,9 +3260,7 @@ async exportConfig(request, env, ctx) {
     let categoryTree = [];
     let flatCats = [];
     try {
-      // 先清理孤儿分类
-      await cleanupOrphanCategories(env);
-
+      // 孤儿分类在写操作中统一清理，读取（首页）不再重复清理以减少每次访问的 DB 开销
       const { results: catRows } = await env.NAV_DB.prepare(
         'SELECT id, name, parent_id, path, sort_order FROM categories ORDER BY sort_order ASC, id ASC'
       ).all();
