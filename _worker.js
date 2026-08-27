@@ -3197,21 +3197,54 @@ async exportConfig(request, env, ctx) {
           backdrop-filter: blur(12px) saturate(180%);
           -webkit-backdrop-filter: blur(12px) saturate(180%);
           border: 1px solid rgba(255, 255, 255, 0.6) !important;
-          transition: all 0.35s cubic-bezier(0.25, 0.8, 0.25, 1);
+          transition: opacity 0.5s ease, transform 0.45s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.4s cubic-bezier(0.25, 0.8, 0.25, 1), border-color 0.4s ease, background 0.4s ease;
           opacity: 0;
-          transform: translateY(16px);
-          animation: cardFadeIn 0.5s ease forwards;
+          transform: translateY(24px);
+          will-change: transform, opacity;
         }
-        .site-card:hover {
-          transform: translateY(-4px);
-          box-shadow: 0 12px 32px rgba(37, 66, 103, 0.12), 0 2px 8px rgba(37, 66, 103, 0.06);
-          border-color: rgba(195, 208, 227, 0.5) !important;
-          background: rgba(255, 255, 255, 0.88) !important;
+        /* 进入视口后弹出 */
+        .site-card.is-visible {
+          opacity: 1;
+          transform: translateY(0);
         }
-        @keyframes cardFadeIn {
-          to { opacity: 1; transform: translateY(0); }
+        .site-card.is-visible:hover {
+          transform: translateY(-6px) scale(1.02);
+          box-shadow: 0 18px 40px rgba(37, 66, 103, 0.16), 0 4px 12px rgba(37, 66, 103, 0.08), 0 0 0 1px rgba(108, 143, 186, 0.08);
+          border-color: rgba(195, 208, 227, 0.65) !important;
+          background: rgba(255, 255, 255, 0.9) !important;
         }
-        
+        /* Logo 动感 */
+        .site-card .logo-container,
+        .site-card > div > div:first-child > div {
+          transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        .site-card:hover .logo-container,
+        .site-card:hover > div > div:first-child > div {
+          transform: scale(1.12) rotate(-4deg);
+        }
+        /* 标题轻微右移 + 颜色 */
+        .site-card h3 {
+          transition: transform 0.35s cubic-bezier(0.25, 0.8, 0.25, 1), color 0.35s ease;
+        }
+        .site-card:hover h3 {
+          transform: translateX(3px);
+          color: rgba(37, 66, 103, 0.95);
+        }
+        /* 分类标签微弹 */
+        .site-card .inline-flex {
+          transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        .site-card:hover .inline-flex {
+          transform: scale(1.06);
+        }
+        /* 复制按钮悬停放大 */
+        .site-card .copy-btn {
+          transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.3s ease, color 0.3s ease;
+        }
+        .site-card:hover .copy-btn {
+          transform: scale(1.08);
+        }
+
         /* 搜索框毛玻璃 */
         .glass-search {
           background: rgba(255, 255, 255, 0.6) !important;
@@ -3579,9 +3612,6 @@ async exportConfig(request, env, ctx) {
               const rawCatalog = site.catelog || '未分类';
               const rawDesc = site.desc || '暂无描述';
               const normalizedUrl = sanitizeUrl(site.url);
-              const hrefValue = escapeHTML(normalizedUrl || '#');
-              const displayUrlText = normalizedUrl || site.url || '';
-              const safeDisplayUrl = displayUrlText ? escapeHTML(displayUrlText) : '未提供链接';
               const dataUrlAttr = escapeHTML(normalizedUrl || '');
               const logoUrl = sanitizeUrl(site.logo);
               const cardInitial = escapeHTML((rawName.trim().charAt(0) || '站').toUpperCase());
@@ -3623,7 +3653,7 @@ async exportConfig(request, env, ctx) {
               }
               
               return `
-                <div class="site-card group rounded-xl overflow-hidden" style="animation-delay:${Math.min(idx * 50, 600)}ms" data-id="${site.id}" data-name="${safeDataName}" data-url="${dataUrlAttr}" data-catalog="${safeDataCatalog}" data-desc="${safeDesc}">
+                <div class="site-card group rounded-xl overflow-hidden ${hasValidUrl ? 'cursor-pointer' : ''}" data-id="${site.id}" data-name="${safeDataName}" data-url="${dataUrlAttr}" data-catalog="${safeDataCatalog}" data-desc="${safeDesc}">
                   <div class="p-5">
                     <div class="flex items-start">
                       <div class="flex-shrink-0 mr-4">
@@ -3645,16 +3675,14 @@ async exportConfig(request, env, ctx) {
                         </span>
                       </div>
                     </div>
-                    
-                    <p class="mt-2 text-sm text-gray-600 leading-relaxed line-clamp-2" title="${safeDesc}">${safeDesc}</p>
-                    
-                    <div class="mt-3 flex items-center justify-between">
-                      <a href="${hrefValue}" ${hasValidUrl ? 'target="_blank" rel="noopener noreferrer"' : ''} class="text-xs text-primary-600 truncate max-w-[140px] hover:underline" title="${safeDisplayUrl}">${safeDisplayUrl}</a>
-                      <button class="copy-btn relative flex items-center px-2 py-1 ${hasValidUrl ? 'bg-accent-100 text-accent-700 hover:bg-accent-200' : 'bg-gray-200 text-gray-400 cursor-not-allowed'} rounded-full text-xs font-medium transition-colors" data-url="${dataUrlAttr}" ${hasValidUrl ? '' : 'disabled'}>
+
+                    <div class="mt-2 flex items-start gap-2">
+                      <p class="flex-1 text-sm text-gray-600 leading-relaxed line-clamp-2" title="${safeDesc}">${safeDesc}</p>
+                      <button class="copy-btn relative flex-shrink-0 flex items-center px-2 py-1 ${hasValidUrl ? 'bg-accent-100 text-accent-700 hover:bg-accent-200' : 'bg-gray-200 text-gray-400 cursor-not-allowed'} rounded-full text-xs font-medium transition-colors" data-url="${dataUrlAttr}" ${hasValidUrl ? '' : 'disabled'}>
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                         </svg>
-                        复制
+                        复制链接
                         <span class="copy-success hidden absolute -top-8 right-0 bg-accent-500 text-white text-xs px-2 py-1 rounded shadow-md">已复制!</span>
                       </button>
                     </div>
@@ -3670,13 +3698,6 @@ async exportConfig(request, env, ctx) {
         <footer class="glass-footer py-8 px-6 mt-12">
           <div class="max-w-5xl mx-auto text-center">
             <p class="text-gray-500">© ${new Date().getFullYear()} 琪舟阁 | 愿你在此找到方向</p>
-            <div class="mt-4 flex justify-center space-x-6">
-              <a href="https://github.com/bayueqi" target="_blank" class="text-gray-400 hover:text-primary-500 transition-colors">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-                </svg>
-              </a>
-            </div>
           </div>
         </footer>
       </main>
@@ -3903,7 +3924,19 @@ async exportConfig(request, env, ctx) {
               }
             });
           });
-          
+
+          // 点击书签卡片跳转到对应链接（按钮区域不触发跳转）
+          document.querySelectorAll('.site-card').forEach(card => {
+            card.addEventListener('click', function(e) {
+              // 点击复制按钮、预览按钮等交互元素时不跳转
+              if (e.target.closest('.copy-btn, .preview-btn, button, a')) return;
+              const url = this.getAttribute('data-url');
+              if (url) {
+                window.open(url, '_blank', 'noopener,noreferrer');
+              }
+            });
+          });
+
           if (closePreview) {
             closePreview.addEventListener('click', closePreviewModal);
           }
@@ -3941,6 +3974,8 @@ async exportConfig(request, env, ctx) {
                 
                 if (name.includes(keyword) || url.includes(keyword) || catalogValue.includes(keyword) || desc.includes(keyword)) {
                   card.classList.remove('hidden');
+                  // 搜索结果无论是否在视口内都直接显示
+                  card.classList.add('is-visible');
                 } else {
                   card.classList.add('hidden');
                 }
@@ -3962,6 +3997,26 @@ async exportConfig(request, env, ctx) {
                 }
               }
             });
+          }
+
+          // 卡片滚动进入视口时触发弹出动画
+          const revealCards = document.querySelectorAll('.site-card');
+          if ('IntersectionObserver' in window && revealCards.length) {
+            const cardObserver = new IntersectionObserver(function(entries, observer) {
+              entries.forEach(function(entry, i) {
+                if (entry.isIntersecting) {
+                  // 同时进入视口的多张卡片错落弹出
+                  setTimeout(function() {
+                    entry.target.classList.add('is-visible');
+                  }, Math.min(i * 50, 300));
+                  observer.unobserve(entry.target);
+                }
+              });
+            }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+            revealCards.forEach(function(card) { cardObserver.observe(card); });
+          } else {
+            // 降级：不支持 IntersectionObserver 时全部直接显示
+            revealCards.forEach(function(card) { card.classList.add('is-visible'); });
           }
 
           // 分类展开/折叠 - 使用localStorage记住展开状态
