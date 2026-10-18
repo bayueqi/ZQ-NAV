@@ -1377,7 +1377,7 @@ async exportConfig(request, env, ctx) {
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>书签管理</title>
-      <link rel="icon" href="http://img.520jk.cc.cd/i/2026/10/10/406956.png" type="image/webp"/>
+      <link rel="icon" href="https://img.520jk.cc.cd/i/2026/10/10/406956.png" type="image/png"/>
       <link rel="stylesheet" href="/static/admin.css">
       <script>
         // 全局配置
@@ -3374,7 +3374,7 @@ async exportConfig(request, env, ctx) {
       <meta charset="UTF-8"/>
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <title>琪舟阁</title>
-      <link rel="icon" href="http://img.520jk.cc.cd/i/2026/10/10/406956.png" type="image/webp"/>
+      <link rel="icon" href="https://img.520jk.cc.cd/i/2026/10/10/406956.png" type="image/png"/>
       <script src="https://cdn.tailwindcss.com"></script>
       <script>
         tailwind.config = {
