@@ -2845,6 +2845,15 @@ async exportConfig(request, env, ctx) {
     <body class="bg-secondary-50 font-sans text-gray-800">
       <!-- 侧边栏开关 -->
       <input type="checkbox" id="sidebar-toggle" class="hidden" checked>
+      <script>
+        (function () {
+          var t = document.getElementById('sidebar-toggle');
+          try { if (localStorage.getItem('zq_sidebar') === 'open') t.checked = false; } catch (e) {}
+          t.addEventListener('change', function () {
+            try { localStorage.setItem('zq_sidebar', t.checked ? 'closed' : 'open'); } catch (e) {}
+          });
+        })();
+      </script>
       
       <!-- 移动端导航按钮 -->
       <div class="fixed top-4 left-4 z-50 lg:hidden">
