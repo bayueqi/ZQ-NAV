@@ -1,43 +1,6 @@
-export const fallbackSVGIcons = [
-  `<svg width="80" height="80" viewBox="0 0 24 24" fill="url(#gradient1)" xmlns="http://www.w3.org/2000/svg">
-     <defs>
-       <linearGradient id="gradient1" x1="0%" y1="0%" x2="100%" y2="100%">
-         <stop offset="0%" stop-color="#7209b7" />
-         <stop offset="100%" stop-color="#4cc9f0" />
-       </linearGradient>
-     </defs>
-     <path d="M12 2L2 12h3v8h6v-6h2v6h6v-8h3L12 2z"/>
-   </svg>`,
-  `<svg width="80" height="80" viewBox="0 0 24 24" fill="url(#gradient2)" xmlns="http://www.w3.org/2000/svg">
-     <defs>
-       <linearGradient id="gradient2" x1="0%" y1="0%" x2="100%" y2="100%">
-         <stop offset="0%" stop-color="#4361ee" />
-         <stop offset="100%" stop-color="#4cc9f0" />
-       </linearGradient>
-     </defs>
-     <circle cx="12" cy="12" r="10"/>
-     <path d="M12 7v5l3.5 3.5 1.42-1.42L14 11.58V7h-2z" fill="#fff"/>
-   </svg>`,
-  `<svg width="80" height="80" viewBox="0 0 24 24" fill="url(#gradient3)" xmlns="http://www.w3.org/2000/svg">
-     <defs>
-       <linearGradient id="gradient3" x1="0%" y1="0%" x2="100%" y2="100%">
-         <stop offset="0%" stop-color="#7209b7" />
-         <stop offset="100%" stop-color="#4361ee" />
-       </linearGradient>
-     </defs>
-     <path d="M12 .587l3.668 7.431L24 9.172l-6 5.843 1.416 8.252L12 19.771l-7.416 3.496L6 15.015 0 9.172l8.332-1.154z"/>
-   </svg>`,
-];
-
-
-
-function getRandomSVG() {
-  return fallbackSVGIcons[Math.floor(Math.random() * fallbackSVGIcons.length)];
-}
-
 /**
  * 获取图标 API URL
- */
+*/
 function getIconApiUrl(env) {
   try {
     const iconApiUrl = env.FaviconApi;
@@ -53,47 +16,6 @@ function getIconApiUrl(env) {
 /**
  * 渲染单个网站卡片（优化版）
  */
-function renderSiteCard(site, env) {
-  let logoHTML;
-  const safeName = site.name || '';
-  
-  if (site.logo) {
-    // 如果有logo URL，优先使用
-    logoHTML = `<img src="${site.logo}" alt="${safeName}" data-site-name="${safeName}" onerror="this.onerror=null; this.remove(); if(this.parentElement && this.dataset.siteName) { this.parentElement.innerHTML = this.dataset.siteName.charAt(0).toUpperCase(); }"/>`;
-  } else if (site.url) {
-    // 如果没有logo URL但有网站URL，使用图标API
-    try {
-      const url = new URL(site.url);
-      const domain = url.hostname;
-      const iconUrl = getIconApiUrl(env).replace('{domain}', domain);
-      logoHTML = `<img src="${iconUrl}" alt="${safeName}" data-site-name="${safeName}" onerror="this.onerror=null; this.remove(); if(this.parentElement && this.dataset.siteName) { this.parentElement.innerHTML = this.dataset.siteName.charAt(0).toUpperCase(); }"/>`;
-    } catch (error) {
-      // 如果URL解析失败，使用首字母
-      logoHTML = safeName ? safeName.charAt(0).toUpperCase() : '?';
-    }
-  } else {
-    // 如果都没有，使用首字母
-    logoHTML = safeName ? safeName.charAt(0).toUpperCase() : getRandomSVG();
-  }
-
-  return `
-    <div class="channel-card" data-id="${site.id}">
-      <div class="channel-number">${site.sort_order}</div>
-      <h3 class="channel-title">${site.name || '未命名'}</h3>
-      <span class="channel-tag">${site.catelog}</span>
-      <div class="logo-wrapper">${logoHTML}</div>
-      <p class="channel-desc">${site.desc || '暂无描述'}</p>
-      <a href="${site.url}" target="_blank" class="channel-link">${site.url}</a>
-      <button class="copy-btn" data-url="${site.url}" title="复制链接">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-        </svg>
-      </button>
-      <div class="copy-success">已复制!</div>
-    </div>
-  `;
-}
 
 function escapeHTML(input) {
   if (input === null || input === undefined) {
@@ -128,6 +50,14 @@ function sanitizeUrl(url) {
     }
   }
   return '';
+}
+
+// 统一的 JSON 响应
+function json(data, status = 200, extraHeaders) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: Object.assign({ 'Content-Type': 'application/json' }, extraHeaders)
+  });
 }
 
 function normalizeSortOrder(value) {
@@ -241,18 +171,6 @@ function flattenCategoryTree(tree, result = []) {
     }
   }
   return result;
-}
-
-function getCategoryDescendantPaths(categories, parentPath) {
-  const paths = [parentPath];
-  for (const cat of categories) {
-    if (cat.path === parentPath || cat.path.startsWith(parentPath + '/')) {
-      if (cat.path !== parentPath) {
-        paths.push(cat.path);
-      }
-    }
-  }
-  return paths;
 }
 
 // 递归剪枝：过滤掉自身无书且所有子分类也无书的空分类节点
@@ -481,9 +399,7 @@ async function isAdminAuthenticated(request, env) {
                     case 'GET':
                         return await this.getConfig(request, env, ctx, url);
                     case 'POST':
-                        if (!(await isAdminAuthenticated(request, env))) {
-                            return this.errorResponse('Unauthorized', 401);
-                        }
+                        if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
                         return await this.createConfig(request, env, ctx);
                     default:
                         return this.errorResponse('Method Not Allowed', 405)
@@ -496,9 +412,7 @@ async function isAdminAuthenticated(request, env) {
               return await this.submitConfig(request, env, ctx);
            }
            if (path === '/categories') {
-              if (!(await isAdminAuthenticated(request, env))) {
-                  return this.errorResponse('Unauthorized', 401);
-              }
+              if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
               if (method === 'GET') {
                   return await this.getCategories(request, env, ctx);
               }
@@ -508,9 +422,7 @@ async function isAdminAuthenticated(request, env) {
               return this.errorResponse('Method Not Allowed', 405);
            }
             if (path.startsWith('/categories/')) {
-                if (!(await isAdminAuthenticated(request, env))) {
-                    return this.errorResponse('Unauthorized', 401);
-                }
+                if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
                 const catIdOrName = decodeURIComponent(path.replace('/categories/', ''));
                 // 处理 /categories/:id/move
                 const moveMatch = catIdOrName.match(/^(\d+)\/move$/);
@@ -539,14 +451,10 @@ async function isAdminAuthenticated(request, env) {
             if (path === `/config/${id}` && /^\d+$/.test(id)) {
                 switch (method) {
                     case 'PUT':
-                        if (!(await isAdminAuthenticated(request, env))) {
-                            return this.errorResponse('Unauthorized', 401);
-                        }
+                        if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
                         return await this.updateConfig(request, env, ctx, id);
                     case 'DELETE':
-                        if (!(await isAdminAuthenticated(request, env))) {
-                            return this.errorResponse('Unauthorized', 401);
-                        }
+                        if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
                         return await this.deleteConfig(request, env, ctx, id);
                     default:
                         return this.errorResponse('Method Not Allowed', 405)
@@ -555,35 +463,25 @@ async function isAdminAuthenticated(request, env) {
               if (path.startsWith('/pending/') && /^\d+$/.test(id)) {
                 switch (method) {
                     case 'PUT':
-                        if (!(await isAdminAuthenticated(request, env))) {
-                            return this.errorResponse('Unauthorized', 401);
-                        }
+                        if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
                         return await this.approvePendingConfig(request, env, ctx, id);
                     case 'DELETE':
-                        if (!(await isAdminAuthenticated(request, env))) {
-                            return this.errorResponse('Unauthorized', 401);
-                        }
+                        if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
                         return await this.rejectPendingConfig(request, env, ctx, id);
                     default:
                         return this.errorResponse('Method Not Allowed', 405)
                 }
             }
             if (path === '/config/import' && method === 'POST') {
-                if (!(await isAdminAuthenticated(request, env))) {
-                    return this.errorResponse('Unauthorized', 401);
-                }
+                if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
                 return await this.importConfig(request, env, ctx);
             }
             if (path === '/config/export' && method === 'GET') {
-                if (!(await isAdminAuthenticated(request, env))) {
-                    return this.errorResponse('Unauthorized', 401);
-                }
+                if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
                 return await this.exportConfig(request, env, ctx);
             }
             if (path === '/pending' && method === 'GET') {
-              if (!(await isAdminAuthenticated(request, env))) {
-                  return this.errorResponse('Unauthorized', 401);
-              }
+              if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
               return await this.getPendingConfig(request, env, ctx, url);
             }
             if (path === '/logout' && method === 'POST') {
@@ -702,13 +600,9 @@ async function isAdminAuthenticated(request, env) {
                 // 同步分类路径并清理空分类
                 await syncCategoryPath(env, approvedCatelog);
                 await cleanupOrphanCategories(env);
-                return new Response(JSON.stringify({
+                return json({
                     code: 200,
                     message: 'Pending config approved successfully'
-                }),{
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
                 })
             }catch(e) {
                 return this.errorResponse(`Failed to approve pending config : ${e.message}`, 500);
@@ -717,10 +611,10 @@ async function isAdminAuthenticated(request, env) {
         async rejectPendingConfig(request, env, ctx, id) {
             try{
                 await env.NAV_DB.prepare('DELETE FROM pending_sites WHERE id = ?').bind(id).run();
-                return new Response(JSON.stringify({
+                return json({
                     code: 200,
                     message: 'Pending config rejected successfully',
-                }), {headers: {'Content-Type': 'application/json'}});
+                });
             } catch(e) {
                 return this.errorResponse(`Failed to reject pending config: ${e.message}`, 500);
             }
@@ -746,13 +640,10 @@ async function isAdminAuthenticated(request, env) {
                   VALUES (?, ?, ?, ?, ?)
             `).bind(sanitizedName, sanitizedUrl, sanitizedLogo, sanitizedDesc, sanitizedCatelog).run();
   
-            return new Response(JSON.stringify({
+            return json({
               code: 201,
               message: 'Config submitted successfully, waiting for admin approve',
-            }), {
-                status: 201,
-                headers: { 'Content-Type': 'application/json' },
-            })
+            }, 201)
           } catch(e) {
               return this.errorResponse(`Failed to submit config : ${e.message}`, 500);
           }
@@ -791,14 +682,11 @@ async function isAdminAuthenticated(request, env) {
               // 自动同步分类路径（新建不存在的分类节点）
               await syncCategoryPath(env, sanitizedCatelog);
 
-            return new Response(JSON.stringify({
+            return json({
               code: 201,
               message: 'Config created successfully',
               insert
-            }), {
-                status: 201,
-                headers: { 'Content-Type': 'application/json' },
-            })
+            }, 201)
           } catch(e) {
               return this.errorResponse(`Failed to create config : ${e.message}`, 500);
           }
@@ -849,11 +737,11 @@ async function isAdminAuthenticated(request, env) {
             // 清理可能变空的旧分类
             await cleanupOrphanCategories(env);
 
-            return new Response(JSON.stringify({
+            return json({
                 code: 200,
                 message: 'Config updated successfully',
                 update
-            }), { headers: { 'Content-Type': 'application/json' }});
+            });
           } catch (e) {
               return this.errorResponse(`Failed to update config: ${e.message}`, 500);
           }
@@ -876,11 +764,11 @@ async function isAdminAuthenticated(request, env) {
               // 清理可能产生的空分类
               await cleanupOrphanCategories(env);
               
-              return new Response(JSON.stringify({
+              return json({
                   code: 200,
                   message: 'Config deleted successfully',
                   del
-              }), {headers: {'Content-Type': 'application/json'}});
+              });
           } catch(e) {
             return this.errorResponse(`Failed to delete config: ${e.message}`, 500);
           }
@@ -899,25 +787,50 @@ async function isAdminAuthenticated(request, env) {
           }
           
           if (sitesToImport.length === 0) {
-            return new Response(JSON.stringify({
+            return json({
               code: 200,
               message: 'Import successful, but no data was found in file.'
-            }), { headers: {'Content-Type': 'application/json'} });
+            });
           }
 
-          const urls = sitesToImport.map(item => (item.url || '').trim()).filter(url => url);
+          // 文件里可能自带重复 url：同一个 url 只保留最后出现的那条（后面的覆盖前面的）
+          const lastUrlAt = new Map();
+          sitesToImport.forEach((item, i) => {
+              const u = (item.url || '').trim();
+              if (u) lastUrlAt.set(u, i);
+          });
+          const rows = sitesToImport.filter((item, i) => {
+              const u = (item.url || '').trim();
+              return !u || lastUrlAt.get(u) === i;
+          });
+
+          const urls = rows.map(item => (item.url || '').trim()).filter(url => url);
           if (urls.length > 0) {
               const placeholders = urls.map(() => '?').join(',');
               await env.NAV_DB.prepare(`DELETE FROM sites WHERE url IN (${placeholders})`).bind(...urls).run();
           }
 
-          const insertStatements = sitesToImport.map(item => {
+          // 库里剩下没被本次覆盖的记录，它们的排序值优先保留，导入的往后让
+          const { results: usedRows } = await env.NAV_DB.prepare(
+              'SELECT sort_order FROM sites WHERE sort_order != 9999'
+          ).all();
+          const usedSort = new Set((usedRows || []).map(r => r.sort_order));
+
+          // 按 sort_order 稳定排序（值相同的保持文件里的先后），再从 1 开始连续编号
+          const ordered = rows
+              .map((r, i) => ({ r, i }))
+              .sort((a, b) => (normalizeSortOrder(a.r.sort_order) - normalizeSortOrder(b.r.sort_order)) || (a.i - b.i))
+              .map(x => x.r);
+
+          let nextSort = 1;
+          const insertStatements = ordered.map(item => {
                 const sanitizedName = (item.name || '').trim() || null;
                 const sanitizedUrl = (item.url || '').trim() || null;
                 const sanitizedLogo = (item.logo || '').trim() || null;
                 const sanitizedDesc = (item.desc || '').trim() || null;
                 const sanitizedCatelog = (item.catelog || '').trim() || null;
-                const sortOrderValue = normalizeSortOrder(item.sort_order);
+                while (usedSort.has(nextSort)) nextSort += 1;
+                const sortOrderValue = nextSort++;
                 return env.NAV_DB.prepare(`
                         INSERT INTO sites (name, url, logo, desc, catelog, sort_order)
                         VALUES (?, ?, ?, ?, ?, ?)
@@ -938,13 +851,10 @@ async function isAdminAuthenticated(request, env) {
           // 导入可能清空某些旧分类，清理孤儿
           await cleanupOrphanCategories(env);
 
-          return new Response(JSON.stringify({
+          return json({
               code: 201,
-              message: `Config imported successfully. ${sitesToImport.length} items processed.`
-          }), {
-              status: 201,
-              headers: {'Content-Type': 'application/json'}
-          });
+              message: `Config imported successfully. ${rows.length} items processed.`
+          }, 201);
         } catch (error) {
           return this.errorResponse(`Failed to import config : ${error.message}`, 500);
         }
@@ -1006,14 +916,14 @@ async exportConfig(request, env, ctx) {
               // 同时返回扁平列表（用于编辑书签时选择分类）
               const flatList = flattenCategoryTree(tree);
 
-              return new Response(JSON.stringify({
+              return json({
                   code: 200,
                   data: {
                       tree: tree,
                       flat: flatList,
                       total: totalSites
                   }
-              }), { headers: { 'Content-Type': 'application/json' } });
+              });
           } catch (e) {
               return this.errorResponse(`Failed to fetch categories: ${e.message}`, 500);
           }
@@ -1058,7 +968,7 @@ async exportConfig(request, env, ctx) {
                 'INSERT INTO categories (name, parent_id, path, sort_order) VALUES (?, ?, ?, ?)'
               ).bind(name, parentId, newPath, sortOrder).run();
 
-              return new Response(JSON.stringify({
+              return json({
                   code: 201,
                   message: '分类创建成功',
                   data: {
@@ -1068,7 +978,7 @@ async exportConfig(request, env, ctx) {
                       path: newPath,
                       sort_order: sortOrder
                   }
-              }), { headers: { 'Content-Type': 'application/json' } });
+              });
           } catch (e) {
               return this.errorResponse(`Failed to create category: ${e.message}`, 500);
           }
@@ -1135,10 +1045,10 @@ async exportConfig(request, env, ctx) {
                   ).bind(newSortOrder, catId).run();
               }
 
-              return new Response(JSON.stringify({
+              return json({
                   code: 200,
                   message: '分类更新成功'
-              }), { headers: { 'Content-Type': 'application/json' } });
+              });
           } catch (e) {
               return this.errorResponse(`Failed to update category: ${e.message}`, 500);
           }
@@ -1168,10 +1078,10 @@ async exportConfig(request, env, ctx) {
 
               await env.NAV_DB.prepare('DELETE FROM categories WHERE id = ?').bind(catId).run();
 
-              return new Response(JSON.stringify({
+              return json({
                   code: 200,
                   message: '分类删除成功'
-              }), { headers: { 'Content-Type': 'application/json' } });
+              });
           } catch (e) {
               return this.errorResponse(`Failed to delete category: ${e.message}`, 500);
           }
@@ -1215,10 +1125,10 @@ async exportConfig(request, env, ctx) {
                   ).bind(i, newSiblings[i].id).run();
               }
 
-              return new Response(JSON.stringify({
+              return json({
                   code: 200,
                   message: '移动成功'
-              }), { headers: { 'Content-Type': 'application/json' } });
+              });
           } catch (e) {
               return this.errorResponse(`Failed to move category: ${e.message}`, 500);
           }
@@ -1239,10 +1149,10 @@ async exportConfig(request, env, ctx) {
                   await env.NAV_DB.prepare('DELETE FROM category_orders WHERE catelog = ?')
                       .bind(normalizedCategory)
                       .run();
-                  return new Response(JSON.stringify({
+                  return json({
                       code: 200,
                       message: 'Category order reset successfully'
-                  }), { headers: { 'Content-Type': 'application/json' } });
+                  });
               }
 
               const sortOrderValue = normalizeSortOrder(body ? body.sort_order : undefined);
@@ -1252,10 +1162,10 @@ async exportConfig(request, env, ctx) {
                 ON CONFLICT(catelog) DO UPDATE SET sort_order = excluded.sort_order
               `).bind(normalizedCategory, sortOrderValue).run();
 
-              return new Response(JSON.stringify({
+              return json({
                   code: 200,
                   message: 'Category order updated successfully'
-              }), { headers: { 'Content-Type': 'application/json' } });
+              });
           } catch (e) {
               return this.errorResponse(`Failed to update category order: ${e.message}`, 500);
           }
@@ -1273,25 +1183,16 @@ async exportConfig(request, env, ctx) {
               // 清除 cookie（设置 Max-Age=0 会立即删除 cookie）
               const clearCookie = buildSessionCookie('', { maxAge: 0 });
               
-              return new Response(JSON.stringify({
+              return json({
                   code: 200,
                   message: 'Logged out successfully'
-              }), { 
-                  status: 200,
-                  headers: { 
-                      'Content-Type': 'application/json',
-                      'Set-Cookie': clearCookie 
-                  }
-              });
+              }, 200, { 'Set-Cookie': clearCookie });
           } catch (e) {
               return this.errorResponse(`Failed to logout: ${e.message}`, 500);
           }
       },
        errorResponse(message, status) {
-          return new Response(JSON.stringify({code: status, message: message}), {
-              status: status,
-              headers: { 'Content-Type': 'application/json' },
-          });
+          return json({code: status, message: message}, status);
       }
     };
   
@@ -1436,10 +1337,10 @@ async exportConfig(request, env, ctx) {
           </div>
          <div id="config">
                     <div class="config-layout">
-                      <aside class="category-sidebar">
+                      <aside class="category-sidebar collapsed">
                         <div class="category-sidebar-header">
                           <h3>分类列表</h3>
-                          <button id="refreshCategorySidebar" title="刷新分类">&#x21bb;</button>
+                          <button id="toggleCategorySidebar" title="展开分类">&#x203A;</button>
                         </div>
                         <ul id="categorySidebarList" class="category-sidebar-list">
                           <li class="category-sidebar-item active" data-category="" data-level="0">
@@ -1480,652 +1381,171 @@ async exportConfig(request, env, ctx) {
       <script src="/static/admin.js"></script>
     </body>
     </html>`,
-            'admin.css': `* {
-        -webkit-tap-highlight-color: transparent;
-    }
-    html {
-        scroll-behavior: smooth;
-    }
-    body {
-        font-family: 'Noto Sans SC', sans-serif;
-        margin: 0;
-        padding: 10px;
-        background: linear-gradient(135deg, #fdf8f3 0%, #f3f5f9 40%, #e8edf5 100%);
-        background-attachment: fixed;
-        min-height: 100vh;
-        color: #2d3748;
-    }
+            'admin.css': `* { -webkit-tap-highlight-color: transparent; }
+    html { scroll-behavior: smooth; }
+    body { font-family: 'Noto Sans SC', sans-serif; margin: 0; padding: 10px; background: #fdf8f3; min-height: 100vh; color: #2d3748; }
     /* 自定义滚动条 */
-    ::-webkit-scrollbar {
-        width: 6px;
-        height: 6px;
-    }
-    ::-webkit-scrollbar-track {
-        background: transparent;
-        border-radius: 10px;
-    }
-    ::-webkit-scrollbar-thumb {
-        background: rgba(108, 143, 186, 0.3);
-        border-radius: 10px;
-    }
-    ::-webkit-scrollbar-thumb:hover {
-        background: rgba(65, 109, 157, 0.5);
-    }
-    .modal {
-        display: none;
-        position: fixed;
-        z-index: 1000;
-        left: 0;
-        top: 0;
-        width: 100%;
-        height: 100%;
-        overflow: auto;
-        background-color: rgba(0, 0, 0, 0.4);
-        backdrop-filter: blur(8px);
-        -webkit-backdrop-filter: blur(8px);
-        animation: fadeIn 0.2s ease;
-    }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; border-radius: 10px; }
+    ::-webkit-scrollbar-thumb { background: rgba(108, 143, 186, 0.3); border-radius: 10px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(65, 109, 157, 0.5); }
+    .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); animation: fadeIn 0.2s ease; }
     @keyframes fadeIn {
         from { opacity: 0; }
         to { opacity: 1; }
     }
-    .modal-content {
-        background: rgba(255, 255, 255, 0.95);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
-        margin: 8% auto;
-        padding: 24px;
-        border: 1px solid rgba(255,255,255,0.3);
-        width: 85%;
-        max-width: 560px;
-        border-radius: 16px;
-        position: relative;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-        animation: slideUp 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-    }
+    .modal-content { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); margin: 8% auto; padding: 24px; border: 1px solid rgba(255,255,255,0.3); width: 85%; max-width: 560px; border-radius: 16px; position: relative; box-shadow: 0 20px 60px rgba(0,0,0,0.2); animation: slideUp 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
     @keyframes slideUp {
         from { opacity: 0; transform: translateY(20px); }
         to { opacity: 1; transform: translateY(0); }
     }
-    .modal-close {
-        color: #a0aec0;
-        position: absolute;
-        right: 16px;
-        top: 12px;
-        font-size: 24px;
-        font-weight: bold;
-        cursor: pointer;
-        transition: all 0.2s;
-        width: 32px;
-        height: 32px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 8px;
-    }
+    .modal-close { color: #a0aec0; position: absolute; right: 16px; top: 12px; font-size: 24px; font-weight: bold; cursor: pointer; transition: all 0.2s; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 8px; }
     .modal-close:hover,
-    .modal-close:focus {
-        color: #4a5568;
-        background: rgba(0,0,0,0.05);
-    }
-    .modal-content form {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-    }
-    .modal-content form label {
-        margin-bottom: 2px;
-        font-weight: 500;
-        color: #4a5568;
-        font-size: 0.9rem;
-    }
-    .modal-content form input {
-        padding: 10px 14px;
-        border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        font-size: 0.95rem;
-        outline: none;
-        transition: all 0.2s ease;
-        background: rgba(255,255,255,0.8);
-    }
-    .modal-content form input:focus {
-        border-color: #416d9d;
-        box-shadow: 0 0 0 3px rgba(65, 109, 157, 0.12);
-        background: #fff;
-    }
-    .modal-content button[type='submit'] {
-        margin-top: 8px;
-        background: linear-gradient(135deg, #416d9d, #305580);
-        color: #fff;
-        border: none;
-        padding: 10px 18px;
-        border-radius: 10px;
-        cursor: pointer;
-        font-size: 0.95rem;
-        font-weight: 500;
-        transition: all 0.25s ease;
-        box-shadow: 0 4px 12px rgba(65, 109, 157, 0.3);
-    }
-    .modal-content button[type='submit']:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 6px 20px rgba(65, 109, 157, 0.4);
-    }
-.container {
-        max-width: 1280px;
-        margin: 0 auto;
-        background: rgba(255, 255, 255, 0.82);
-        backdrop-filter: blur(20px) saturate(180%);
-        -webkit-backdrop-filter: blur(20px) saturate(180%);
-        padding: 24px;
-        border-radius: 20px;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
-        border: 1px solid rgba(255,255,255,0.3);
-    }
-    .admin-header {
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
-        margin-bottom: 24px;
-    }
-    .admin-header-left {
-        flex: 1;
-    }
+    .modal-close:focus { color: #4a5568; background: rgba(0,0,0,0.05); }
+    .modal-content form { display: flex; flex-direction: column; gap: 4px; }
+    .modal-content form label { margin-bottom: 2px; font-weight: 500; color: #4a5568; font-size: 0.9rem; }
+    .modal-content form input { padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.95rem; outline: none; transition: all 0.2s ease; background: rgba(255,255,255,0.8); }
+    .modal-content form input:focus { border-color: #416d9d; box-shadow: 0 0 0 3px rgba(65, 109, 157, 0.12); background: #fff; }
+    .modal-content button[type='submit'] { margin-top: 8px; background: linear-gradient(135deg, #416d9d, #305580); color: #fff; border: none; padding: 10px 18px; border-radius: 10px; cursor: pointer; font-size: 0.95rem; font-weight: 500; transition: all 0.25s ease; box-shadow: 0 4px 12px rgba(65, 109, 157, 0.3); }
+    .modal-content button[type='submit']:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(65, 109, 157, 0.4); }
+.container { max-width: 1280px; margin: 0 auto; background: rgba(255, 255, 255, 0.82); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%); padding: 24px; border-radius: 20px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12); border: 1px solid rgba(255,255,255,0.3); }
+    .admin-header { display: flex; flex-direction: column; gap: 16px; margin-bottom: 24px; }
+    .admin-header-left { flex: 1; }
     @media (min-width: 768px) {
-        .admin-header {
-            flex-direction: row;
-            align-items: center;
-            justify-content: space-between;
-        }
+        .admin-header { flex-direction: row; align-items: center; justify-content: space-between; }
     }
-    h1 {
-        font-size: 1.6rem;
-        margin: 0;
-        color: #2d3748;
-        font-weight: 700;
-    }
+    h1 { font-size: 1.6rem; margin: 0; color: #2d3748; font-weight: 700; }
     
     /* 工具栏图标按钮 */
-    .admin-toolbar {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-    }
-    .toolbar-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 9px 16px;
-        border: none;
-        border-radius: 12px;
-        cursor: pointer;
-        font-size: 0.88rem;
-        font-weight: 600;
-        color: #fff;
-        transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
-        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-    }
-    .toolbar-btn svg {
-        width: 18px;
-        height: 18px;
-        flex-shrink: 0;
-    }
-    .toolbar-btn:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 16px rgba(0,0,0,0.2);
-        filter: brightness(1.1);
-    }
-    .toolbar-btn:active {
-        transform: translateY(0);
-    }
-    .toolbar-btn-add {
-        background: linear-gradient(135deg, #48bb78, #38a169);
-    }
-    .toolbar-btn-import {
-        background: linear-gradient(135deg, #416d9d, #305580);
-    }
-    .toolbar-btn-export {
-        background: linear-gradient(135deg, #38b2ac, #319795);
-    }
-    .toolbar-btn-logout {
-        background: linear-gradient(135deg, #fc8181, #e53e3e);
-    }
+    .admin-toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
+    .toolbar-btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border: 1px solid transparent; border-radius: 12px; cursor: pointer; font-size: 0.88rem; font-weight: 600; background: #fff; color: #305580; transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease; box-shadow: 0 1px 2px rgba(48, 85, 128, 0.06); }
+    .toolbar-btn svg { width: 18px; height: 18px; flex-shrink: 0; }
+    .toolbar-btn:hover { box-shadow: 0 3px 10px rgba(48, 85, 128, 0.12); }
+    .toolbar-btn:active { transform: translateY(1px); }
+    .toolbar-btn-add { background: #305580; border-color: #305580; color: #fff; }
+    .toolbar-btn-add:hover { background: #254267; border-color: #254267; filter: none; }
+    .toolbar-btn-import,
+    .toolbar-btn-export { background: #fff; border-color: #dbe4ef; color: #305580; }
+    .toolbar-btn-import:hover,
+    .toolbar-btn-export:hover { background: #eef3f9; border-color: #c6d5e6; filter: none; }
+    .toolbar-btn-logout { background: #fff; border-color: #ecdbd8; color: #b0473f; }
+    .toolbar-btn-logout:hover { background: #fdf4f3; border-color: #e3c4c0; filter: none; }
     @media (max-width: 480px) {
-        .toolbar-btn span {
-            display: none;
-        }
-        .toolbar-btn {
-            padding: 10px 12px;
-            border-radius: 10px;
-        }
-        .toolbar-btn svg {
-            width: 20px;
-            height: 20px;
-        }
-        .container {
-            padding: 16px;
-            border-radius: 16px;
-        }
+        .toolbar-btn span { display: none; }
+        .toolbar-btn { padding: 10px 12px; border-radius: 10px; }
+        .toolbar-btn svg { width: 20px; height: 20px; }
+        .container { padding: 16px; border-radius: 16px; }
     }
 
-    #message {
-        border-radius: 12px;
-        padding: 12px 16px;
-        animation: slideDown 0.3s ease;
-    }
+    #message { border-radius: 12px; padding: 12px 16px; animation: slideDown 0.3s ease; }
 
-    #config {
-        border: 1px solid rgba(226, 232, 240, 0.6);
-        border-radius: 16px;
-        padding: 12px;
-        background: rgba(255,255,255,0.4);
-    }
+    #config { border: 1px solid rgba(226, 232, 240, 0.6); border-radius: 16px; padding: 12px; background: rgba(255,255,255,0.4); }
     
     @keyframes slideDown {
         from { opacity: 0; transform: translateY(-12px); }
         to { opacity: 1; transform: translateY(0); }
     }
- input[type="text"], input[type="number"] {
-        padding: 10px 14px;
-        border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        font-size: 0.95rem;
-        outline: none;
-        margin-bottom: 5px;
-        transition: all 0.2s ease;
-        background: rgba(255,255,255,0.8);
-    }
-    input[type="text"]:focus, input[type="number"]:focus {
-        border-color: #416d9d;
-        box-shadow: 0 0 0 3px rgba(65, 109, 157, 0.12);
-        background: #fff;
-    }
+ input[type="text"], input[type="number"] { padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.95rem; outline: none; margin-bottom: 5px; transition: all 0.2s ease; background: rgba(255,255,255,0.8); }
+    input[type="text"]:focus, input[type="number"]:focus { border-color: #416d9d; box-shadow: 0 0 0 3px rgba(65, 109, 157, 0.12); background: #fff; }
 
     /* 级联分类选择器 */
     .cascader-host { width: 100%; }
-    .cascader-wrap {
-      display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-      padding: 8px 10px;
-      background: rgba(255,255,255,0.7);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border: 1px solid #e2e8f0;
-      border-radius: 10px;
-      min-height: 42px;
-      transition: all 0.2s ease;
-    }
-    .cascader-wrap:focus-within {
-      border-color: #416d9d;
-      box-shadow: 0 0 0 3px rgba(65,109,157,0.12);
-      background: rgba(255,255,255,0.9);
-    }
+    .cascader-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; background: rgba(255,255,255,0.7); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid #e2e8f0; border-radius: 10px; min-height: 42px; transition: all 0.2s ease; }
+    .cascader-wrap:focus-within { border-color: #416d9d; box-shadow: 0 0 0 3px rgba(65,109,157,0.12); background: rgba(255,255,255,0.9); }
     .cascader-wrap select,
-    .cascader-wrap input {
-      padding: 7px 10px !important;
-      margin: 0 !important;
-      border: 1px solid #e2e8f0;
-      border-radius: 8px;
-      font-size: 0.88rem;
-      background: rgba(255,255,255,0.9);
-      outline: none;
-      transition: all 0.2s ease;
-      max-width: 200px;
-      color: #334155;
-    }
+    .cascader-wrap input { padding: 7px 10px !important; margin: 0 !important; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.88rem; background: rgba(255,255,255,0.9); outline: none; transition: all 0.2s ease; max-width: 200px; color: #334155; }
     .cascader-wrap select:focus,
-    .cascader-wrap input:focus {
-      border-color: #416d9d;
-      box-shadow: 0 0 0 3px rgba(65,109,157,0.12);
-      background: #fff;
-    }
-    .cascader-level {
-      border-color: #c3d0e3 !important;
-      background: rgba(232,238,247,0.9) !important;
-      font-weight: 500;
-    }
-    .cascader-picker {
-      border-style: dashed !important;
-      color: #416d9d;
-    }
+    .cascader-wrap input:focus { border-color: #416d9d; box-shadow: 0 0 0 3px rgba(65,109,157,0.12); background: #fff; }
+    .cascader-level { border-color: #c3d0e3 !important; background: rgba(232,238,247,0.9) !important; font-weight: 500; }
+    .cascader-picker { border-style: dashed !important; color: #416d9d; }
     .cascader-sep { color: #94a3b8; font-size: 0.85rem; padding: 0 2px; }
-    .cascader-remove {
-      display: inline-flex; align-items: center; justify-content: center;
-      width: 20px; height: 20px;
-      border-radius: 50%;
-      background: rgba(229,62,62,0.12);
-      color: #e53e3e;
-      cursor: pointer;
-      font-size: 14px; line-height: 1;
-      transition: all 0.2s ease;
-      margin-right: 2px;
-      user-select: none;
-    }
-    .cascader-remove:hover {
-      background: rgba(229,62,62,0.28);
-      transform: scale(1.12);
-    }
-    .cascader-ok {
-      padding: 7px 12px !important;
-      margin: 0 !important;
-      background: linear-gradient(135deg,#48bb78,#38a169) !important;
-      border-radius: 8px !important;
-      font-size: 0.82rem !important;
-      box-shadow: 0 2px 6px rgba(72,187,120,0.3);
-    }
+    .cascader-remove { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: rgba(229,62,62,0.12); color: #e53e3e; cursor: pointer; font-size: 14px; line-height: 1; transition: all 0.2s ease; margin-right: 2px; user-select: none; }
+    .cascader-remove:hover { background: rgba(229,62,62,0.28); transform: scale(1.12); }
+    .cascader-ok { padding: 7px 12px !important; margin: 0 !important; background: #305580 !important; border-radius: 8px !important; font-size: 0.82rem !important; box-shadow: 0 2px 6px rgba(72,187,120,0.3); }
     .cascader-ok:hover { filter: brightness(1.05); transform: translateY(-1px); }
-    .cascader-path {
-      margin-top: 6px;
-      font-size: 0.8rem;
-      color: #64748b;
-      display: flex; align-items: center; gap: 6px;
-    }
+    .cascader-path { margin-top: 6px; font-size: 0.8rem; color: #64748b; display: flex; align-items: center; gap: 6px; }
     .cascader-path-label { font-weight: 600; color: #416d9d; }
     .cascader-path-value { color: #475569; word-break: break-all; }
-    button {
-        background: linear-gradient(135deg, #416d9d, #305580);
-        color: #fff;
-        border: none;
-        padding: 9px 16px;
-        border-radius: 10px;
-        cursor: pointer;
-        font-size: 0.9rem;
-        font-weight: 500;
-        transition: all 0.25s ease;
-    }
-    button:hover {
-        filter: brightness(1.1);
-        transform: translateY(-1px);
-    }
-    .table-wrapper {
-        overflow: auto;
-        border-radius: 12px;
-        flex: 1 1 auto;
-        min-height: 0;
-    }
-    table {
-        width: 100%;
-        min-width: 800px;
-        border-collapse: separate;
-        border-spacing: 0;
-        margin-bottom: 16px;
-        border-radius: 12px;
-        overflow: hidden;
-    }
-    th, td {
-        border-bottom: 1px solid rgba(226, 232, 240, 0.6);
-        padding: 12px 14px;
-        text-align: left;
-        color: #4a5568;
-    }
-    th {
-        background: rgba(65, 109, 157, 0.08);
-        font-weight: 600;
-        color: #4a5568;
-        font-size: 0.85rem;
-        text-transform: uppercase;
-        letter-spacing: 0.03em;
-    }
-    tr {
-        transition: background 0.15s ease;
-    }
-    tbody tr:hover {
-        background: rgba(65, 109, 157, 0.04);
-    }
-    tr:nth-child(even) {
-        background: rgba(247, 250, 252, 0.5);
-    }
-    tr:nth-child(even):hover {
-        background: rgba(65, 109, 157, 0.06);
-    }
-    .pagination {
-        text-align: center;
-        margin-top: 12px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        flex: 0 0 auto;
-    }
-    .pagination button {
-        margin: 0;
-        background: rgba(255,255,255,0.8);
-        color: #4a5568;
-        border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        padding: 8px 16px;
-        font-weight: 500;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
-    .pagination button:hover:not(:disabled) {
-        background: #fff;
-        border-color: #cbd5e0;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-    }
-    .pagination button:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
-        transform: none !important;
-    }
-    .pagination span {
-        color: #4a5568;
-        font-size: 0.9rem;
-    }
+    button { background: linear-gradient(135deg, #416d9d, #305580); color: #fff; border: none; padding: 9px 16px; border-radius: 10px; cursor: pointer; font-size: 0.9rem; font-weight: 500; transition: all 0.25s ease; }
+    button:hover { filter: brightness(1.1); transform: translateY(-1px); }
+    .table-wrapper { overflow: auto; border-radius: 12px; flex: 1 1 auto; min-height: 0; }
+    table { width: 100%; min-width: 1080px; table-layout: fixed; border-collapse: separate; border-spacing: 0; margin-bottom: 16px; border-radius: 12px; overflow: hidden; }
+    th, td { border-bottom: 1px solid rgba(226, 232, 240, 0.6); padding: 12px 14px; text-align: left; color: #4a5568; white-space: nowrap; }
+    /* 固定列宽：名称 / 网址 / 图标 / 描述 / 分类 / 排序 / 操作 */
+    #configTable th:nth-child(1) { width: 120px; }
+    #configTable th:nth-child(2) { width: 220px; }
+    #configTable th:nth-child(3) { width: 60px; }
+    #configTable th:nth-child(4) { width: 180px; }
+    #configTable th:nth-child(5) { width: 110px; }
+    #configTable th:nth-child(6) { width: 56px; }
+    #configTable th:nth-child(7) { width: 130px; }
+    /* 单行显示，超出部分在格子里横向滑动，不换行、不撑高行 */
+    td .cell { overflow-x: auto; overflow-y: hidden; white-space: nowrap; /* 常驻 3px 横向拖动条，只有内容溢出时才出现 */ /* 别加 scrollbar-width/color，会让下面 ::-webkit-scrollbar 全部失效 */ margin-bottom: -3px; }
+    td .cell::-webkit-scrollbar { height: 3px; }
+    td .cell::-webkit-scrollbar-button,
+    td .cell::-webkit-scrollbar-button:horizontal:decrement,
+    td .cell::-webkit-scrollbar-button:horizontal:increment { display: none; width: 0; height: 0; }
+    td .cell::-webkit-scrollbar-track { background: transparent; }
+    td .cell::-webkit-scrollbar-thumb { background: rgba(65, 109, 157, 0.45); border-radius: 2px; }
+    td .cell::-webkit-scrollbar-thumb:hover { background: rgba(65, 109, 157, 0.62); }
+    th { background: rgba(65, 109, 157, 0.08); font-weight: 600; color: #4a5568; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.03em; }
+    tr { transition: background 0.15s ease; }
+    tbody tr:hover { background: rgba(65, 109, 157, 0.04); }
+    tr:nth-child(even) { background: rgba(247, 250, 252, 0.5); }
+    tr:nth-child(even):hover { background: rgba(65, 109, 157, 0.06); }
+    .pagination { text-align: center; margin-top: 12px; display: flex; align-items: center; justify-content: center; gap: 8px; flex: 0 0 auto; }
+    .pagination button { margin: 0; background: rgba(255,255,255,0.8); color: #4a5568; border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 16px; font-weight: 500; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .pagination button:hover:not(:disabled) { background: #fff; border-color: #cbd5e0; box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
+    .pagination button:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important; }
+    .pagination span { color: #4a5568; font-size: 0.9rem; }
     
-    .success {
-        background: linear-gradient(135deg, #48bb78, #38a169);
-        color: #fff;
-        box-shadow: 0 4px 12px rgba(72, 187, 120, 0.3);
-    }
-    .error {
-        background: linear-gradient(135deg, #fc8181, #e53e3e);
-        color: #fff;
-        box-shadow: 0 4px 12px rgba(229, 62, 62, 0.3);
-    }
+    .success { background: #3f7d5c; color: #fff; box-shadow: 0 4px 14px rgba(63, 125, 92, 0.22); }
+    .error { background: #a94b43; color: #fff; box-shadow: 0 4px 14px rgba(169, 75, 67, 0.22); }
     
     /* 分类侧边栏布局 */
-    .config-layout {
-        display: flex;
-        gap: 16px;
-        height: calc(100vh - 170px);
-        min-height: 440px;
-    }
-    .category-sidebar {
-        flex: 0 0 220px;
-        background: rgba(255,255,255,0.5);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border-radius: 14px;
-        padding: 14px;
-        border: 1px solid rgba(226, 232, 240, 0.5);
-        overflow-y: auto;
-        max-height: none;
-    }
-    .category-sidebar-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 12px;
-        padding-bottom: 10px;
-        border-bottom: 1px solid rgba(226, 232, 240, 0.5);
-    }
-    .category-sidebar-header h3 {
-        margin: 0;
-        font-size: 0.95rem;
-        color: #2d3748;
-        font-weight: 600;
-    }
-    #refreshCategorySidebar {
-        background: none;
-        border: none;
-        font-size: 1.1rem;
-        cursor: pointer;
-        color: #a0aec0;
-        padding: 4px 8px;
-        border-radius: 8px;
-        transition: all 0.2s;
-        width: auto;
-    }
-    #refreshCategorySidebar:hover {
-        background: rgba(65, 109, 157, 0.1);
-        color: #416d9d;
-        transform: rotate(180deg);
-    }
-    .category-sidebar-list {
-        list-style: none;
-        padding: 0;
-        margin: 0;
-    }
-    .category-sidebar-item {
-        padding: 7px 10px;
-        cursor: pointer;
-        border-radius: 10px;
-        margin-bottom: 2px;
-        font-size: 0.87rem;
-        color: #4a5568;
-        transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        position: relative;
-        user-select: none;
-    }
-    .category-sidebar-item:hover {
-        background: rgba(65, 109, 157, 0.08);
-        color: #416d9d;
-        padding-left: 14px;
-    }
-    .category-sidebar-item.active {
-        background: linear-gradient(135deg, #416d9d, #305580);
-        color: #fff;
-        font-weight: 600;
-        box-shadow: 0 2px 8px rgba(65, 109, 157, 0.3);
-    }
-    .category-sidebar-item .cat-toggle {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 16px;
-        height: 16px;
-        font-size: 0.6rem;
-        transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-        flex-shrink: 0;
-        color: #a0aec0;
-    }
-    .category-sidebar-item .cat-toggle.expanded {
-        transform: rotate(90deg);
-    }
-    .category-sidebar-item.active .cat-toggle {
-        color: rgba(255,255,255,0.8);
-    }
-    .category-sidebar-item .cat-label {
-        flex: 1;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-    .category-sidebar-item .cat-count {
-        font-size: 0.7rem;
-        background: rgba(0,0,0,0.06);
-        padding: 1px 7px;
-        border-radius: 10px;
-        flex-shrink: 0;
-        font-weight: 500;
-    }
-    .category-sidebar-item.active .cat-count {
-        background: rgba(255,255,255,0.25);
-    }
-    .category-sidebar-item .cat-sort-actions {
-        display: none;
-        gap: 2px;
-        flex-shrink: 0;
-        margin-left: 2px;
-    }
-    .category-sidebar-item:hover .cat-sort-actions {
-        display: inline-flex;
-    }
-    .category-sidebar-item .cat-sort-btn {
-        width: 20px;
-        height: 20px;
-        border: none;
-        background: rgba(0,0,0,0.05);
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 0.55rem;
-        color: #718096;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 0;
-        line-height: 1;
-        transition: all 0.15s ease;
-    }
-    .category-sidebar-item .cat-sort-btn:hover:not(.disabled) {
-        background: linear-gradient(135deg, #416d9d, #305580);
-        color: #fff;
-        transform: scale(1.1);
-    }
-    .category-sidebar-item .cat-sort-btn.disabled {
-        opacity: 0.3;
-        cursor: not-allowed;
-    }
-    .category-sidebar-item.active .cat-sort-btn {
-        background: rgba(255,255,255,0.2);
-        color: #fff;
-    }
-    .category-sidebar-item.active .cat-sort-btn:hover:not(.disabled) {
-        background: rgba(255,255,255,0.35);
-    }
-    .category-sidebar-children {
-        list-style: none;
-        padding: 0;
-        margin: 0;
-        overflow: hidden;
-    }
-    .category-sidebar-children.collapsed {
-        display: none;
-    }
-    .config-main {
-        flex: 1;
-        min-width: 0;
-        display: flex;
-        flex-direction: column;
-        min-height: 0;
-    }
+    .config-layout { display: flex; gap: 16px; height: calc(100vh - 170px); min-height: 440px; }
+    .category-sidebar { flex: 0 0 220px; background: rgba(255,255,255,0.5); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-radius: 14px; padding: 14px; border: 1px solid rgba(226, 232, 240, 0.5); overflow-y: auto; max-height: none; }
+    .category-sidebar-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid rgba(226, 232, 240, 0.5); }
+    .category-sidebar-header h3 { margin: 0; font-size: 0.95rem; color: #2d3748; font-weight: 600; }
+    #toggleCategorySidebar { background: none; border: none; font-size: 1.15rem; line-height: 1; cursor: pointer; color: #a0aec0; padding: 4px 8px; border-radius: 8px; transition: all 0.2s; width: auto; }
+    #toggleCategorySidebar:hover { background: rgba(65, 109, 157, 0.1); color: #416d9d; }
+    .category-sidebar { transition: flex-basis 0.22s ease, padding 0.22s ease; }
+    .category-sidebar.collapsed { flex: 0 0 42px; padding: 10px 5px; overflow: hidden; }
+    .category-sidebar.collapsed .category-sidebar-header { justify-content: center; border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+    .category-sidebar.collapsed .category-sidebar-header h3,
+    .category-sidebar.collapsed .category-sidebar-list { display: none; }
+    .category-sidebar-list { list-style: none; padding: 0; margin: 0; }
+    .category-sidebar-item { padding: 7px 10px; cursor: pointer; border-radius: 10px; margin-bottom: 2px; font-size: 0.87rem; color: #4a5568; transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1); display: flex; align-items: center; gap: 4px; position: relative; user-select: none; }
+    .category-sidebar-item:hover { background: rgba(65, 109, 157, 0.08); color: #416d9d; padding-left: 14px; }
+    .category-sidebar-item.active { background: linear-gradient(135deg, #416d9d, #305580); color: #fff; font-weight: 600; box-shadow: 0 2px 8px rgba(65, 109, 157, 0.3); }
+    .category-sidebar-item .cat-toggle { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; font-size: 0.6rem; transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1); flex-shrink: 0; color: #a0aec0; }
+    .category-sidebar-item .cat-toggle.expanded { transform: rotate(90deg); }
+    .category-sidebar-item.active .cat-toggle { color: rgba(255,255,255,0.8); }
+    .category-sidebar-item .cat-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .category-sidebar-item .cat-count { font-size: 0.7rem; background: rgba(0,0,0,0.06); padding: 1px 7px; border-radius: 10px; flex-shrink: 0; font-weight: 500; }
+    .category-sidebar-item.active .cat-count { background: rgba(255,255,255,0.25); }
+    .category-sidebar-item .cat-sort-actions { display: none; gap: 2px; flex-shrink: 0; margin-left: 2px; }
+    .category-sidebar-item:hover .cat-sort-actions { display: inline-flex; }
+    .category-sidebar-item .cat-sort-btn { width: 20px; height: 20px; border: none; background: rgba(0,0,0,0.05); border-radius: 6px; cursor: pointer; font-size: 0.55rem; color: #718096; display: inline-flex; align-items: center; justify-content: center; padding: 0; line-height: 1; transition: all 0.15s ease; }
+    .category-sidebar-item .cat-sort-btn:hover:not(.disabled) { background: linear-gradient(135deg, #416d9d, #305580); color: #fff; transform: scale(1.1); }
+    .category-sidebar-item .cat-sort-btn.disabled { opacity: 0.3; cursor: not-allowed; }
+    .category-sidebar-item.active .cat-sort-btn { background: rgba(255,255,255,0.2); color: #fff; }
+    .category-sidebar-item.active .cat-sort-btn:hover:not(.disabled) { background: rgba(255,255,255,0.35); }
+    .category-sidebar-children { list-style: none; padding: 0; margin: 0; overflow: hidden; }
+    .category-sidebar-children.collapsed { display: none; }
+    .config-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
     /* 操作按钮 */
-    .actions {
-        display: flex;
-        gap: 6px;
-    }
-    .actions button {
-        padding: 6px 12px;
-        font-size: 0.8rem;
-        border-radius: 8px;
-        font-weight: 500;
-    }
-    .edit-btn {
-        background: linear-gradient(135deg, #38b2ac, #319795) !important;
-        box-shadow: 0 2px 6px rgba(56, 178, 172, 0.25);
-    }
-    .del-btn {
-        background: linear-gradient(135deg, #fc8181, #e53e3e) !important;
-        box-shadow: 0 2px 6px rgba(229, 62, 62, 0.25);
-    }
+    .actions { display: flex; gap: 6px; flex-wrap: nowrap; }
+    .actions button { padding: 6px 12px; font-size: 0.8rem; border-radius: 8px; font-weight: 500; white-space: nowrap; flex: 0 0 auto; }
+    .edit-btn { background: #fff !important; color: #305580 !important; border: 1px solid #dbe4ef !important; box-shadow: none; }
+    .edit-btn:hover { background: #eef3f9 !important; border-color: #c6d5e6 !important; }
+    .del-btn { background: #fff !important; color: #b0473f !important; border: 1px solid #ecdbd8 !important; box-shadow: none; }
+    .del-btn:hover { background: #fdf4f3 !important; border-color: #e3c4c0 !important; }
     /* 搜索框 */
-    .search-input {
-        width: 100%;
-        box-sizing: border-box;
-        border-radius: 12px !important;
-        background: rgba(255,255,255,0.7) !important;
-    }
+    .search-input { width: 100%; box-sizing: border-box; border-radius: 12px !important; background: rgba(255,255,255,0.7) !important; }
     @media (max-width: 768px) {
-        .config-layout {
-            flex-direction: column;
-            height: auto;
-            min-height: 0;
-        }
-        .category-sidebar {
-            flex: none;
-            max-height: 200px;
-        }
+        .config-layout { flex-direction: column; height: auto; min-height: 0; }
+        .category-sidebar { flex: none; max-height: 200px; }
     }
       `,
           'admin.js': `
@@ -2177,7 +1597,7 @@ async exportConfig(request, env, ctx) {
           
           // 分类侧边栏（树形结构）
           const categorySidebarList = document.getElementById('categorySidebarList');
-          const refreshCategorySidebarBtn = document.getElementById('refreshCategorySidebar');
+          const toggleCategorySidebarBtn = document.getElementById('toggleCategorySidebar');
           let selectedCategory = '';
           let categoryTree = [];
           let flatCategories = [];
@@ -2186,7 +1606,7 @@ async exportConfig(request, env, ctx) {
 
           function loadCategorySidebar() {
             if (!categorySidebarList) return;
-            fetch('/api/categories')
+            fetch('/api/categories', { cache: 'no-store' })
               .then(res => res.json())
               .then(data => {
                 if (data.code === 200) {
@@ -2545,9 +1965,13 @@ async exportConfig(request, env, ctx) {
               });
           }
 
-          if (refreshCategorySidebarBtn) {
-            refreshCategorySidebarBtn.addEventListener('click', () => {
-              loadCategorySidebar();
+          if (toggleCategorySidebarBtn) {
+            toggleCategorySidebarBtn.addEventListener('click', () => {
+              const aside = toggleCategorySidebarBtn.closest('.category-sidebar');
+              if (!aside) return;
+              const collapsed = aside.classList.toggle('collapsed');
+              toggleCategorySidebarBtn.innerHTML = collapsed ? '&#x203A;' : '&#x2039;';
+              toggleCategorySidebarBtn.title = collapsed ? '展开分类' : '收起分类';
             });
           }
 
@@ -2742,12 +2166,12 @@ async exportConfig(request, env, ctx) {
               const catelogCell = escapeHTML(config.catelog || '');
               const sortValue = config.sort_order || 9999;
                row.innerHTML = \`
-                  <td>\${safeName}</td>
-                  <td>\${urlCell}</td>
-                  <td>\${logoCell}</td>
-                  <td>\${descCell}</td>
-                  <td>\${catelogCell}</td>
-				 <td>\${sortValue}</td>
+                  <td><div class="cell">\${safeName}</div></td>
+                  <td><div class="cell">\${urlCell}</div></td>
+                  <td><div class="cell">\${logoCell}</div></td>
+                  <td><div class="cell">\${descCell}</div></td>
+                  <td><div class="cell">\${catelogCell}</div></td>
+				 <td><div class="cell">\${sortValue}</div></td>
                   <td class="actions">
                     <button class="edit-btn" data-id="\${config.id}">编辑</button>
                     <button class="del-btn" data-id="\${config.id}">删除</button>
@@ -3032,166 +2456,30 @@ async exportConfig(request, env, ctx) {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>管理员登录</title>
         <style>
-          *, *::before, *::after {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            -webkit-tap-highlight-color: transparent;
-          }
-          html, body {
-            height: 100%;
-            font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-          }
-          body {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background: linear-gradient(135deg, #fdf8f3 0%, #f3f5f9 40%, #e8edf5 100%);
-            background-attachment: fixed;
-            padding: 1rem;
-            position: relative;
-            overflow: hidden;
-          }
-          body::before {
-            content: '';
-            position: absolute;
-            width: 500px;
-            height: 500px;
-            border-radius: 50%;
-            background: radial-gradient(circle, rgba(65, 109, 157, 0.08) 0%, transparent 70%);
-            top: -100px;
-            right: -100px;
-            pointer-events: none;
-          }
-          body::after {
-            content: '';
-            position: absolute;
-            width: 400px;
-            height: 400px;
-            border-radius: 50%;
-            background: radial-gradient(circle, rgba(234, 160, 94, 0.08) 0%, transparent 70%);
-            bottom: -80px;
-            left: -80px;
-            pointer-events: none;
-          }
-          .login-container {
-            background: rgba(255, 255, 255, 0.88);
-            backdrop-filter: blur(24px) saturate(180%);
-            -webkit-backdrop-filter: blur(24px) saturate(180%);
-            padding: 2.5rem 2rem;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0,0,0,0.05);
-            border: 1px solid rgba(255,255,255,0.4);
-            width: 100%;
-            max-width: 380px;
-            animation: slideUpFade 0.5s cubic-bezier(0.25, 0.8, 0.25, 1);
-            position: relative;
-            z-index: 1;
-          }
+          *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+          html, body { height: 100%; font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+          body { display: flex; justify-content: center; align-items: center; background: linear-gradient(135deg, #fdf8f3 0%, #f3f5f9 40%, #e8edf5 100%); background-attachment: fixed; padding: 1rem; position: relative; overflow: hidden; }
+          body::before { content: ''; position: absolute; width: 500px; height: 500px; border-radius: 50%; background: radial-gradient(circle, rgba(65, 109, 157, 0.08) 0%, transparent 70%); top: -100px; right: -100px; pointer-events: none; }
+          body::after { content: ''; position: absolute; width: 400px; height: 400px; border-radius: 50%; background: radial-gradient(circle, rgba(234, 160, 94, 0.08) 0%, transparent 70%); bottom: -80px; left: -80px; pointer-events: none; }
+          .login-container { background: rgba(255, 255, 255, 0.88); backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%); padding: 2.5rem 2rem; border-radius: 20px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0,0,0,0.05); border: 1px solid rgba(255,255,255,0.4); width: 100%; max-width: 380px; animation: slideUpFade 0.5s cubic-bezier(0.25, 0.8, 0.25, 1); position: relative; z-index: 1; }
           @keyframes slideUpFade {
             from { opacity: 0; transform: translateY(24px) scale(0.98); }
             to { opacity: 1; transform: translateY(0) scale(1); }
           }
-          .login-icon {
-            width: 56px;
-            height: 56px;
-            margin: 0 auto 1.25rem;
-            background: linear-gradient(135deg, #416d9d, #305580);
-            border-radius: 16px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 8px 24px rgba(65, 109, 157, 0.3);
-          }
-          .login-icon svg {
-            width: 28px;
-            height: 28px;
-            color: white;
-          }
-          .login-title {
-            font-size: 1.5rem;
-            font-weight: 700;
-            text-align: center;
-            margin: 0 0 0.5rem 0;
-            color: #2d3748;
-          }
-          .login-subtitle {
-            text-align: center;
-            color: #718096;
-            font-size: 0.88rem;
-            margin-bottom: 1.75rem;
-          }
-          .form-group {
-            margin-bottom: 1rem;
-          }
-          label {
-            display: block;
-            margin-bottom: 0.4rem;
-            font-weight: 500;
-            color: #4a5568;
-            font-size: 0.88rem;
-          }
-          input[type="text"], input[type="password"] {
-            width: 100%;
-            padding: 0.75rem 1rem;
-            border: 1.5px solid #e2e8f0;
-            border-radius: 12px;
-            font-size: 0.95rem;
-            transition: all 0.2s ease;
-            background: rgba(255,255,255,0.7);
-            outline: none;
-          }
-          input[type="text"]:focus, input[type="password"]:focus {
-            border-color: #416d9d;
-            box-shadow: 0 0 0 3px rgba(65, 109, 157, 0.12);
-            background: #fff;
-          }
-          button {
-            width: 100%;
-            padding: 0.8rem;
-            background: linear-gradient(135deg, #416d9d, #305580);
-            color: white;
-            border: none;
-            border-radius: 12px;
-            font-size: 0.95rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
-            box-shadow: 0 4px 14px rgba(65, 109, 157, 0.35);
-            margin-top: 0.5rem;
-          }
-          button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 24px rgba(65, 109, 157, 0.45);
-            filter: brightness(1.05);
-          }
-          button:active {
-            transform: translateY(0) scale(0.98);
-          }
-          .error-message {
-            color: #e53e3e;
-            font-size: 0.82rem;
-            margin-top: 0.75rem;
-            text-align: center;
-            display: none;
-            background: rgba(229, 62, 62, 0.08);
-            padding: 0.5rem;
-            border-radius: 8px;
-          }
-          .back-link {
-            display: block;
-            text-align: center;
-            margin-top: 1.25rem;
-            color: #718096;
-            text-decoration: none;
-            font-size: 0.85rem;
-            transition: color 0.2s;
-          }
-          .back-link:hover {
-            color: #416d9d;
-          }
+          .login-icon { width: 56px; height: 56px; margin: 0 auto 1.25rem; background: linear-gradient(135deg, #416d9d, #305580); border-radius: 16px; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 24px rgba(65, 109, 157, 0.3); }
+          .login-icon svg { width: 28px; height: 28px; color: white; }
+          .login-title { font-size: 1.5rem; font-weight: 700; text-align: center; margin: 0 0 0.5rem 0; color: #2d3748; }
+          .login-subtitle { text-align: center; color: #718096; font-size: 0.88rem; margin-bottom: 1.75rem; }
+          .form-group { margin-bottom: 1rem; }
+          label { display: block; margin-bottom: 0.4rem; font-weight: 500; color: #4a5568; font-size: 0.88rem; }
+          input[type="text"], input[type="password"] { width: 100%; padding: 0.75rem 1rem; border: 1.5px solid #e2e8f0; border-radius: 12px; font-size: 0.95rem; transition: all 0.2s ease; background: rgba(255,255,255,0.7); outline: none; }
+          input[type="text"]:focus, input[type="password"]:focus { border-color: #416d9d; box-shadow: 0 0 0 3px rgba(65, 109, 157, 0.12); background: #fff; }
+          button { width: 100%; padding: 0.8rem; background: linear-gradient(135deg, #416d9d, #305580); color: white; border: none; border-radius: 12px; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1); box-shadow: 0 4px 14px rgba(65, 109, 157, 0.35); margin-top: 0.5rem; }
+          button:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(65, 109, 157, 0.45); filter: brightness(1.05); }
+          button:active { transform: translateY(0) scale(0.98); }
+          .error-message { color: #e53e3e; font-size: 0.82rem; margin-top: 0.75rem; text-align: center; display: none; background: rgba(229, 62, 62, 0.08); padding: 0.5rem; border-radius: 8px; }
+          .back-link { display: block; text-align: center; margin-top: 1.25rem; color: #718096; text-decoration: none; font-size: 0.85rem; transition: color 0.2s; }
+          .back-link:hover { color: #416d9d; }
         </style>
       </head>
       <body>
@@ -3430,227 +2718,79 @@ async exportConfig(request, env, ctx) {
       </script>
       <style>
         /* 全局平滑过渡 */
-        * {
-          -webkit-tap-highlight-color: transparent;
-        }
-        html {
-          scroll-behavior: smooth;
-        }
-        body {
-          background: linear-gradient(135deg, #fdf8f3 0%, #f3f5f9 40%, #e8edf5 100%) !important;
-          background-attachment: fixed;
-          min-height: 100vh;
-        }
+        * { -webkit-tap-highlight-color: transparent; }
+        html { scroll-behavior: smooth; }
+        body { background: #fdf8f3 !important; min-height: 100vh; }
         /* 自定义滚动条 */
-        ::-webkit-scrollbar {
-          width: 6px;
-          height: 6px;
-        }
-        ::-webkit-scrollbar-track {
-          background: transparent;
-          border-radius: 10px;
-        }
-        ::-webkit-scrollbar-thumb {
-          background: rgba(108, 143, 186, 0.3);
-          border-radius: 10px;
-          transition: background 0.3s;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-          background: rgba(65, 109, 157, 0.5);
-        }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb { background: rgba(108, 143, 186, 0.3); border-radius: 10px; transition: background 0.3s; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(65, 109, 157, 0.5); }
         
         /* 毛玻璃侧边栏 */
-        .sidebar {
-          background: rgba(255, 255, 255, 0.72) !important;
-          backdrop-filter: blur(20px) saturate(180%);
-          -webkit-backdrop-filter: blur(20px) saturate(180%);
-          border-right: 1px solid rgba(255, 255, 255, 0.5) !important;
-          box-shadow: 4px 0 24px rgba(37, 66, 103, 0.06);
-        }
+        .sidebar { background: rgba(255, 255, 255, 0.72) !important; backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%); border-right: 1px solid rgba(255, 255, 255, 0.5) !important; box-shadow: 4px 0 24px rgba(37, 66, 103, 0.06); }
         
         /* 毛玻璃浮动按钮 */
-        .glass-btn {
-          background: rgba(255, 255, 255, 0.75);
-          backdrop-filter: blur(12px) saturate(180%);
-          -webkit-backdrop-filter: blur(12px) saturate(180%);
-          border: 1px solid rgba(255, 255, 255, 0.6);
-          box-shadow: 0 4px 16px rgba(37, 66, 103, 0.08);
-          transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-        }
-        .glass-btn:hover {
-          background: rgba(255, 255, 255, 0.9);
-          box-shadow: 0 6px 20px rgba(37, 66, 103, 0.12);
-          transform: translateY(-1px);
-        }
+        .glass-btn { background: rgba(255, 255, 255, 0.75); backdrop-filter: blur(12px) saturate(180%); -webkit-backdrop-filter: blur(12px) saturate(180%); border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 4px 16px rgba(37, 66, 103, 0.08); transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
+        .glass-btn:hover { background: rgba(255, 255, 255, 0.9); box-shadow: 0 6px 20px rgba(37, 66, 103, 0.12); transform: translateY(-1px); }
         
         /* 卡片悬停效果 - 增强版 */
-        .site-card {
-          background: rgba(255, 255, 255, 0.75) !important;
-          backdrop-filter: blur(12px) saturate(180%);
-          -webkit-backdrop-filter: blur(12px) saturate(180%);
-          border: 1px solid rgba(255, 255, 255, 0.6) !important;
-          transition: opacity 0.5s ease, transform 0.45s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.4s cubic-bezier(0.25, 0.8, 0.25, 1), border-color 0.4s ease, background 0.4s ease;
-          opacity: 0;
-          transform: translateY(24px);
-          will-change: transform, opacity;
-        }
+        .site-card { background: rgba(255, 255, 255, 0.75) !important; backdrop-filter: blur(12px) saturate(180%); -webkit-backdrop-filter: blur(12px) saturate(180%); border: 1px solid rgba(255, 255, 255, 0.6) !important; transition: opacity 0.5s ease, transform 0.45s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.4s cubic-bezier(0.25, 0.8, 0.25, 1), border-color 0.4s ease, background 0.4s ease; opacity: 0; transform: translateY(24px); will-change: transform, opacity; }
         /* 进入视口后弹出 */
-        .site-card.is-visible {
-          opacity: 1;
-          transform: translateY(0);
-        }
-        .site-card.is-visible:hover {
-          transform: translateY(-6px) scale(1.02);
-          box-shadow: 0 18px 40px rgba(37, 66, 103, 0.16), 0 4px 12px rgba(37, 66, 103, 0.08), 0 0 0 1px rgba(108, 143, 186, 0.08);
-          border-color: rgba(195, 208, 227, 0.65) !important;
-          background: rgba(255, 255, 255, 0.9) !important;
-        }
+        .site-card.is-visible { opacity: 1; transform: translateY(0); }
+        .site-card.is-visible:hover { transform: translateY(-6px) scale(1.02); box-shadow: 0 18px 40px rgba(37, 66, 103, 0.16), 0 4px 12px rgba(37, 66, 103, 0.08), 0 0 0 1px rgba(108, 143, 186, 0.08); border-color: rgba(195, 208, 227, 0.65) !important; background: rgba(255, 255, 255, 0.9) !important; }
         /* Logo 动感 */
         .site-card .logo-container,
-        .site-card > div > div:first-child > div {
-          transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-        }
+        .site-card > div > div:first-child > div { transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
         .site-card:hover .logo-container,
-        .site-card:hover > div > div:first-child > div {
-          transform: scale(1.12) rotate(-4deg);
-        }
+        .site-card:hover > div > div:first-child > div { transform: scale(1.12) rotate(-4deg); }
         /* 标题轻微右移 + 颜色 */
-        .site-card h3 {
-          transition: transform 0.35s cubic-bezier(0.25, 0.8, 0.25, 1), color 0.35s ease;
-        }
-        .site-card:hover h3 {
-          transform: translateX(3px);
-          color: rgba(37, 66, 103, 0.95);
-        }
+        .site-card h3 { transition: transform 0.35s cubic-bezier(0.25, 0.8, 0.25, 1), color 0.35s ease; }
+        .site-card:hover h3 { transform: translateX(3px); color: rgba(37, 66, 103, 0.95); }
         /* 分类标签微弹 */
-        .site-card .inline-flex {
-          transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
-        }
-        .site-card:hover .inline-flex {
-          transform: scale(1.06);
-        }
+        .site-card .inline-flex { transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
+        .site-card:hover .inline-flex { transform: scale(1.06); }
         /* 复制按钮悬停放大 */
-        .site-card .copy-btn {
-          transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.3s ease, color 0.3s ease;
-        }
-        .site-card:hover .copy-btn {
-          transform: scale(1.08);
-        }
+        .site-card .copy-btn { transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.3s ease, color 0.3s ease; }
+        .site-card:hover .copy-btn { transform: scale(1.08); }
 
         /* 搜索框毛玻璃 */
-        .glass-search {
-          background: rgba(255, 255, 255, 0.6) !important;
-          backdrop-filter: blur(8px);
-          -webkit-backdrop-filter: blur(8px);
-          border: 1px solid rgba(225, 231, 241, 0.8) !important;
-          transition: all 0.3s ease;
-        }
-        .glass-search:focus {
-          background: rgba(255, 255, 255, 0.9) !important;
-          border-color: rgba(108, 143, 186, 0.5) !important;
-          box-shadow: 0 0 0 3px rgba(108, 143, 186, 0.1);
-        }
+        .glass-search { background: rgba(255, 255, 255, 0.6) !important; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid rgba(225, 231, 241, 0.8) !important; transition: all 0.3s ease; }
+        .glass-search:focus { background: rgba(255, 255, 255, 0.9) !important; border-color: rgba(108, 143, 186, 0.5) !important; box-shadow: 0 0 0 3px rgba(108, 143, 186, 0.1); }
         
         /* 分类链接平滑过渡 */
-        .category-link {
-          transition: all 0.2s ease;
-          position: relative;
-        }
-        .category-link:hover {
-          padding-left: 16px !important;
-        }
-        .category-link.active {
-          background: linear-gradient(135deg, rgba(65, 109, 157, 0.1), rgba(65, 109, 157, 0.05)) !important;
-        }
+        .category-link { transition: all 0.2s ease; position: relative; }
+        .category-link:hover { padding-left: 16px !important; }
+        .category-link.active { background: linear-gradient(135deg, rgba(65, 109, 157, 0.1), rgba(65, 109, 157, 0.05)) !important; }
         
         /* 页脚毛玻璃 */
-        .glass-footer {
-          background: rgba(255, 255, 255, 0.5) !important;
-          backdrop-filter: blur(12px);
-          -webkit-backdrop-filter: blur(12px);
-          border-top: 1px solid rgba(255, 255, 255, 0.5) !important;
-        }
+        .glass-footer { background: rgba(255, 255, 255, 0.5) !important; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-top: 1px solid rgba(255, 255, 255, 0.5) !important; }
         
         /* 返回顶部按钮 */
-        .back-top-btn {
-          background: rgba(60, 151, 109, 0.9) !important;
-          backdrop-filter: blur(8px);
-          -webkit-backdrop-filter: blur(8px);
-          box-shadow: 0 4px 20px rgba(60, 151, 109, 0.3);
-          transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-        }
-        .back-top-btn:hover {
-          background: rgba(46, 119, 85, 0.95) !important;
-          transform: translateY(-2px);
-          box-shadow: 0 6px 24px rgba(60, 151, 109, 0.4);
-        }
-        .back-top-btn.visible {
-          opacity: 1 !important;
-          visibility: visible !important;
-        }
+        .back-top-btn { background: rgba(60, 151, 109, 0.9) !important; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: 0 4px 20px rgba(60, 151, 109, 0.3); transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
+        .back-top-btn:hover { background: rgba(46, 119, 85, 0.95) !important; transform: translateY(-2px); box-shadow: 0 6px 24px rgba(60, 151, 109, 0.4); }
+        .back-top-btn.visible { opacity: 1 !important; visibility: visible !important; }
         
         /* 移动端遮罩层平滑 */
-        .mobile-overlay {
-          transition: opacity 0.3s ease, visibility 0.3s ease;
-          backdrop-filter: blur(4px);
-          -webkit-backdrop-filter: blur(4px);
-        }
+        .mobile-overlay { transition: opacity 0.3s ease, visibility 0.3s ease; backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
         
         /* 预览模态框增强 */
-        .preview-modal {
-          backdrop-filter: blur(8px);
-          -webkit-backdrop-filter: blur(8px);
-        }
-        .preview-modal.visible {
-          opacity: 1 !important;
-          visibility: visible !important;
-        }
+        .preview-modal { backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+        .preview-modal.visible { opacity: 1 !important; visibility: visible !important; }
         
         /* 头部渐变增强 */
-        .hero-header {
-          background: linear-gradient(135deg, #254267 0%, #305580 50%, #416d9d 100%) !important;
-          position: relative;
-          overflow: hidden;
-        }
-        .hero-header::before {
-          content: '';
-          position: absolute;
-          top: -50%;
-          right: -20%;
-          width: 600px;
-          height: 600px;
-          background: radial-gradient(circle, rgba(210, 170, 121, 0.15) 0%, transparent 70%);
-          pointer-events: none;
-        }
-        .hero-header::after {
-          content: '';
-          position: absolute;
-          bottom: -30%;
-          left: -10%;
-          width: 400px;
-          height: 400px;
-          background: radial-gradient(circle, rgba(97, 180, 138, 0.1) 0%, transparent 70%);
-          pointer-events: none;
-        }
+        .hero-header { background: linear-gradient(135deg, #254267 0%, #305580 50%, #416d9d 100%) !important; position: relative; overflow: hidden; }
+        .hero-header::before { content: ''; position: absolute; top: -50%; right: -20%; width: 600px; height: 600px; background: radial-gradient(circle, rgba(210, 170, 121, 0.15) 0%, transparent 70%); pointer-events: none; }
+        .hero-header::after { content: ''; position: absolute; bottom: -30%; left: -10%; width: 400px; height: 400px; background: radial-gradient(circle, rgba(97, 180, 138, 0.1) 0%, transparent 70%); pointer-events: none; }
         
         /* 毛玻璃统计卡片 */
-        .glass-stats {
-          background: rgba(255, 255, 255, 0.12) !important;
-          backdrop-filter: blur(16px);
-          -webkit-backdrop-filter: blur(16px);
-          border: 1px solid rgba(255, 255, 255, 0.15) !important;
-          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-        }
+        .glass-stats { background: rgba(255, 255, 255, 0.12) !important; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.15) !important; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1); }
         
         /* 分类展开按钮平滑 */
-        .cat-expand-btn {
-          transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s ease, background 0.2s ease;
-        }
+        .cat-expand-btn { transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s ease, background 0.2s ease; }
         
         /* 复制成功提示 */
-        .copy-tip {
-          animation: copyTipFade 1.8s ease forwards;
-        }
+        .copy-tip { animation: copyTipFade 1.8s ease forwards; }
         @keyframes copyTipFade {
           0% { opacity: 0; transform: translateY(8px); }
           15% { opacity: 1; transform: translateY(0); }
@@ -3665,112 +2805,46 @@ async exportConfig(request, env, ctx) {
           80% { opacity: 1; transform: translateY(0); }
           100% { opacity: 0; transform: translateY(-10px); }
         }
-        .copy-success-animation {
-          animation: fadeInOut 2s ease forwards;
-        }
+        .copy-success-animation { animation: fadeInOut 2s ease forwards; }
         
         /* 分类展开/折叠 */
-        .cat-row {
-          display: flex;
-          align-items: center;
-        }
-        .cat-expand-btn {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 20px;
-          height: 28px;
-          border: none;
-          background: transparent;
-          cursor: pointer;
-          color: #9ca3af;
-          padding: 0;
-          flex-shrink: 0;
-          border-radius: 4px;
-          transition: transform 0.15s, color 0.15s, background 0.15s;
-        }
-        .cat-expand-btn:hover {
-          color: #6c63ff;
-          background: rgba(108,99,255,0.08);
-        }
-        .cat-expand-btn.expanded {
-          transform: rotate(90deg);
-        }
-        .cat-expand-placeholder {
-          display: inline-block;
-          width: 20px;
-          height: 28px;
-          flex-shrink: 0;
-        }
-        .cat-children {
-          overflow: hidden;
-          max-height: 5000px;
-          transition: max-height 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.25s ease;
-          opacity: 1;
-        }
-        .cat-children.collapsed {
-          max-height: 0;
-          opacity: 0;
-        }
+        .cat-row { display: flex; align-items: center; }
+        .cat-expand-btn { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 28px; border: none; background: transparent; cursor: pointer; color: #9ca3af; padding: 0; flex-shrink: 0; border-radius: 4px; transition: transform 0.15s, color 0.15s, background 0.15s; }
+        .cat-expand-btn:hover { color: #6c63ff; background: rgba(108,99,255,0.08); }
+        .cat-expand-btn.expanded { transform: rotate(90deg); }
+        .cat-expand-placeholder { display: inline-block; width: 20px; height: 28px; flex-shrink: 0; }
+        .cat-children { overflow: hidden; max-height: 5000px; transition: max-height 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.25s ease; opacity: 1; }
+        .cat-children.collapsed { max-height: 0; opacity: 0; }
         
         /* 移动端侧边栏 */
         @media (max-width: 768px) {
-          .mobile-sidebar {
-            transform: translateX(-100%);
-            transition: transform 0.3s ease;
-          }
-          .mobile-sidebar.open {
-            transform: translateX(0);
-          }
-          .mobile-overlay {
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.3s ease;
-          }
-          .mobile-overlay.open {
-            opacity: 1;
-            pointer-events: auto;
-          }
+          .mobile-sidebar { transform: translateX(-100%); transition: transform 0.3s ease; }
+          .mobile-sidebar.open { transform: translateX(0); }
+          .mobile-overlay { opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+          .mobile-overlay.open { opacity: 1; pointer-events: auto; }
         }
         
         /* 多行文本截断 */
-        .line-clamp-2 {
-          display: -webkit-box;
-          -webkit-line-clamp: 2;
-          -webkit-box-orient: vertical;
-          overflow: hidden;
-        }
+        .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         
         /* 侧边栏控制 */
-        #sidebar-toggle {
-          display: none;
-        }
+        #sidebar-toggle { display: none; }
         
         @media (min-width: 769px) {
-          #sidebar-toggle:checked ~ .sidebar {
-            margin-left: -16rem;
-          }
-          #sidebar-toggle:checked ~ .main-content {
-            margin-left: 0;
-          }
+          #sidebar-toggle:checked ~ .sidebar { margin-left: -16rem; }
+          #sidebar-toggle:checked ~ .main-content { margin-left: 0; }
         }
         
         /* 性能优化样式 */
-        .logo-img {
-          will-change: opacity;
-        }
+        .logo-img { will-change: opacity; }
         
         /* 预连接优化 - 减少 DNS 查找延迟 */
-        body::before {
-          content: "";
-          display: none;
-          /* 预连接常用的图标 API（如果有） */
-        }
+        body::before { content: ""; display: none; /* 预连接常用的图标 API（如果有） */ }
       </style>
     </head>
     <body class="bg-secondary-50 font-sans text-gray-800">
       <!-- 侧边栏开关 -->
-      <input type="checkbox" id="sidebar-toggle" class="hidden">
+      <input type="checkbox" id="sidebar-toggle" class="hidden" checked>
       
       <!-- 移动端导航按钮 -->
       <div class="fixed top-4 left-4 z-50 lg:hidden">
