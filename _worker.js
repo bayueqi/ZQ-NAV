@@ -2800,7 +2800,8 @@ async exportConfig(request, env, ctx) {
     // 设置面板回填当前配置：按 id 定位输入框，不依赖占位文字
     html = fillInputValue(html, 'setTitle', settings.site_title || '');
     html = fillInputValue(html, 'setSubtitle', settings.site_subtitle || '');
-    html = fillInputValue(html, 'setFavicon', settings.favicon_api || '');
+    html = fillInputValue(html, 'setFavicon', faviconApi);
+    html = fillInputValue(html, 'setUser', settings.admin_user || 'admin');
     return new Response(html, {
         headers: {'Content-Type': 'text/html; charset=utf-8'}
     });
