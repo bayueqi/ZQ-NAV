@@ -3127,8 +3127,7 @@ async exportConfig(request, env, ctx) {
         .preview-modal.visible { opacity: 1 !important; visibility: visible !important; }
         
         /* 头部渐变增强 */
-        .hero-header { background: linear-gradient(135deg, #4a78a5 0%, #5e8db8 55%, #78a5cc 100%) !important; position: relative; overflow: hidden; margin: 16px 16px 0; border-radius: 18px; }
-        @media (max-width: 640px) { .hero-header { margin: 12px 12px 0; border-radius: 14px; } }
+        .hero-header { background: linear-gradient(135deg, #4a78a5 0%, #5e8db8 55%, #78a5cc 100%) !important; position: relative; overflow: hidden; }
         .hero-header::before { content: ''; position: absolute; top: -50%; right: -20%; width: 600px; height: 600px; background: radial-gradient(circle, rgba(210, 170, 121, 0.15) 0%, transparent 70%); pointer-events: none; }
         .hero-header::after { content: ''; position: absolute; bottom: -30%; left: -10%; width: 400px; height: 400px; background: radial-gradient(circle, rgba(97, 180, 138, 0.1) 0%, transparent 70%); pointer-events: none; }
         
@@ -3281,8 +3280,8 @@ async exportConfig(request, env, ctx) {
       <!-- 主内容区 -->
       <main class="main-content lg:ml-64 min-h-screen transition-all duration-300">
         <!-- 顶部横幅 -->
-        <header class="hero-header text-white py-10 px-2 md:px-2 shadow-sm relative z-10">
-          <div class="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-6 relative z-10">
+        <header class="hero-header text-white py-10 px-6 md:px-10 shadow-sm relative z-10">
+          <div class="max-w-5xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-6 relative z-10">
             <div class="flex-1 text-center md:text-left">
               <h1 class="text-3xl md:text-4xl font-semibold tracking-tight drop-shadow-sm">${escapeHTML(siteSettings.site_title)}</h1>
               <p class="mt-3 text-sm md:text-base text-secondary-100/90 leading-relaxed">
@@ -3331,7 +3330,7 @@ async exportConfig(request, env, ctx) {
           </div>
           
           <!-- 网站卡片网格 -->
-          <div class="rounded-2xl ${currentSites.length ? 'bg-white/60 p-4 sm:p-6' : 'hidden'}">
+          <div class="rounded-2xl ${currentSites.length ? 'border border-white/40 bg-white/40 backdrop-blur-md p-4 sm:p-6 shadow-sm' : 'hidden'}">
             <div id="sitesGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
               ${currentSites.map((site, idx) => {
               const rawName = site.name || '未命名';
