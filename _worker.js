@@ -1474,6 +1474,15 @@ async exportConfig(request, env, ctx) {
               </form>
             </div>
           </div>
+          <div class="modal" id="logoutModal" style="display:none;">
+            <div class="modal-content modal-confirm">
+              <h2>退出登录</h2>
+              <div class="confirm-actions">
+                <button type="button" class="confirm-btn" id="logoutCancel">取消</button>
+                <button type="button" class="confirm-btn confirm-btn-danger" id="logoutConfirm">退出</button>
+              </div>
+            </div>
+          </div>
          <div id="config">
                     <div class="config-layout">
                       <aside class="category-sidebar collapsed">
@@ -1572,6 +1581,12 @@ async exportConfig(request, env, ctx) {
     .toolbar-btn-settings { background: #fff; border-color: #dbe4ef; color: #305580; }
     .toolbar-btn-settings:hover { background: #eef3f9; border-color: #c6d5e6; filter: none; }
     .modal-content h2 { margin: 0 0 16px; font-size: 1.15rem; color: #2d3748; font-weight: 600; }
+    .modal-confirm { max-width: 340px; margin-top: 18%; }
+    .confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
+    .confirm-btn { padding: 9px 18px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; color: #4a5568; font-family: inherit; font-size: 0.9rem; font-weight: 500; cursor: pointer; transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease; }
+    .confirm-btn:hover { background: #f7fafc; border-color: #d5dbe3; }
+    .confirm-btn-danger { background: #b42318; border-color: #b42318; color: #fff; }
+    .confirm-btn-danger:hover { background: #96180f; border-color: #96180f; color: #fff; }
     @media (max-width: 480px) {
         .toolbar-btn span { display: none; }
         .toolbar-btn { padding: 10px 12px; border-radius: 10px; }
@@ -2553,25 +2568,38 @@ async exportConfig(request, env, ctx) {
           
           // 退出登录功能
           const logoutBtn = document.getElementById('logoutBtn');
-          if (logoutBtn) {
+          const logoutModal = document.getElementById('logoutModal');
+          const logoutCancel = document.getElementById('logoutCancel');
+          const logoutConfirm = document.getElementById('logoutConfirm');
+
+          function doLogout() {
+            fetch('/api/logout', {
+              method: 'POST'
+            }).then(res => res.json())
+              .then(data => {
+                if (data.code === 200) {
+                  showMessage('已成功退出登录', 'success');
+                  setTimeout(() => {
+                    window.location.href = '/admin';
+                  }, 1000);
+                } else {
+                  showMessage(data.message || '退出失败', 'error');
+                }
+              }).catch(err => {
+                showMessage('网络错误', 'error');
+              });
+          }
+
+          if (logoutBtn && logoutModal) {
             logoutBtn.addEventListener('click', () => {
-              if (!confirm('确定要退出登录吗？')) return;
-              
-              fetch('/api/logout', {
-                method: 'POST'
-              }).then(res => res.json())
-                .then(data => {
-                  if (data.code === 200) {
-                    showMessage('已成功退出登录', 'success');
-                    setTimeout(() => {
-                      window.location.href = '/admin';
-                    }, 1000);
-                  } else {
-                    showMessage(data.message || '退出失败', 'error');
-                  }
-                }).catch(err => {
-                  showMessage('网络错误', 'error');
-                });
+              logoutModal.style.display = 'block';
+            });
+            logoutCancel.addEventListener('click', () => {
+              logoutModal.style.display = 'none';
+            });
+            logoutConfirm.addEventListener('click', () => {
+              logoutModal.style.display = 'none';
+              doLogout();
             });
           }
 
@@ -2582,11 +2610,6 @@ async exportConfig(request, env, ctx) {
           const settingsForm = document.getElementById('settingsForm');
 
           function openSettings() {
-            var d = window.__SITE_SETTINGS__ || {};
-            document.getElementById('setTitle').value = d.site_title || '';
-            document.getElementById('setSubtitle').value = d.site_subtitle || '';
-            document.getElementById('setFavicon').value = d.favicon_api || '';
-            document.getElementById('setUser').value = d.admin_user || '';
             document.getElementById('setCurrentPass').value = '';
             document.getElementById('setNewPass').value = '';
             settingsModal.style.display = 'block';
@@ -2637,16 +2660,13 @@ async exportConfig(request, env, ctx) {
     let html = await this.getFileContent('admin.html');
     const faviconApi = await getIconApiUrl(env);
     const settings = await readSettings(env);
-    const bootSettings = JSON.stringify({
-      site_title: settings.site_title || '',
-      site_subtitle: settings.site_subtitle || '',
-      favicon_api: settings.favicon_api || '',
-      admin_user: settings.admin_user || ''
-    }).replace(/</g, '\\u003c');
     html = html
       .replace('const faviconApi = \'https://toolb.cn/favicon/{domain}\';', `const faviconApi = ${JSON.stringify(faviconApi)};`)
       .replace('<title>书签管理</title>', `<title>${escapeHTML(settings.site_title || '琪舟阁')} · 书签管理</title>`)
-      .replace("const settingsBtn = document.getElementById('settingsBtn');", () => `window.__SITE_SETTINGS__ = ${bootSettings};\n          const settingsBtn = document.getElementById('settingsBtn');`);
+      .replace('<input type="text" id="setTitle" placeholder="站点名称">', () => `<input type="text" id="setTitle" placeholder="站点名称" value="${escapeHTML(settings.site_title || '')}">`)
+      .replace('<input type="text" id="setSubtitle" placeholder="显示在首页顶部">', () => `<input type="text" id="setSubtitle" placeholder="显示在首页顶部" value="${escapeHTML(settings.site_subtitle || '')}">`)
+      .replace('<input type="text" id="setFavicon" placeholder="https://toolb.cn/favicon/{domain}">', () => `<input type="text" id="setFavicon" placeholder="https://toolb.cn/favicon/{domain}" value="${escapeHTML(settings.favicon_api || '')}">`)
+      .replace('<input type="text" id="setUser" autocomplete="username">', () => `<input type="text" id="setUser" autocomplete="username" value="${escapeHTML(settings.admin_user || '')}">`);
     return new Response(html, {
         headers: {'Content-Type': 'text/html; charset=utf-8'}
     });
@@ -2664,7 +2684,7 @@ async exportConfig(request, env, ctx) {
         <style>
           *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
           html, body { height: 100%; }
-          body { display: flex; align-items: center; justify-content: center; padding: 24px; background: #f4f5f7; color: #111827; font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+          body { display: flex; align-items: center; justify-content: center; padding: 24px; background: #fdf8f3; color: #111827; font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
           .login { width: 100%; max-width: 380px; padding: 32px 28px; background: #ffffff; border: 1px solid #e6e8ec; border-radius: 10px; box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 12px 32px rgba(16, 24, 40, 0.06); }
           .login h1 { font-size: 20px; font-weight: 600; color: #111827; }
           form { margin-top: 24px; }
@@ -2676,7 +2696,7 @@ async exportConfig(request, env, ctx) {
           .err { margin-top: 14px; font-size: 13px; color: #b42318; }
           button { width: 100%; height: 42px; margin-top: 24px; border: 0; border-radius: 8px; background: #254267; color: #ffffff; font-family: inherit; font-size: 15px; font-weight: 500; cursor: pointer; transition: background 0.15s ease; }
           button:hover { background: #1d3757; }
-          .back { display: inline-block; margin-top: 20px; color: #6b7280; font-size: 13px; text-decoration: none; }
+          .back { display: block; margin-top: 20px; color: #6b7280; font-size: 13px; text-align: center; text-decoration: none; }
           .back:hover { color: #254267; }
         </style>
       </head>
