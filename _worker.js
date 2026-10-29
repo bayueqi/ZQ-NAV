@@ -1590,7 +1590,7 @@ async exportConfig(request, env, ctx) {
         .container { padding: 16px; border-radius: 16px; }
     }
 
-    #message { border-radius: 12px; padding: 12px 16px; animation: slideDown 0.3s ease; }
+    #message { border-radius: 8px; padding: 10px 14px; font-size: 13px; animation: slideDown 0.3s ease; }
 
     #config { border: 1px solid rgba(226, 232, 240, 0.6); border-radius: 16px; padding: 12px; background: rgba(255,255,255,0.4); }
     
@@ -1664,8 +1664,8 @@ async exportConfig(request, env, ctx) {
     .pagination button:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important; }
     .pagination span { color: #4a5568; font-size: 0.9rem; }
     
-    .success { background: #3f7d5c; color: #fff; box-shadow: 0 4px 14px rgba(63, 125, 92, 0.22); }
-    .error { background: #a94b43; color: #fff; box-shadow: 0 4px 14px rgba(169, 75, 67, 0.22); }
+    .success { background: #f2f7f4; color: #2f6b4e; border: 1px solid #d6e5db; }
+    .error { background: #fbf3f2; color: #96382f; border: 1px solid #eed6d2; }
     
     /* 分类侧边栏布局 */
     .config-layout { display: flex; gap: 16px; height: calc(100vh - 170px); min-height: 440px; }
@@ -2775,11 +2775,11 @@ async exportConfig(request, env, ctx) {
           <form method="post" action="/admin" novalidate>
             <div class="field">
               <label for="username">用户名</label>
-              <input type="text" id="username" name="name" required autocomplete="username" placeholder="admin">
+              <input type="text" id="username" name="name" required autocomplete="username" placeholder="默认 admin">
             </div>
             <div class="field">
               <label for="password">密码</label>
-              <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="admin">
+              <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="默认 admin">
             </div>
             <p class="err"${hasError ? '' : ' style="display:none;"'}>${hasError ? safeMessage : '用户名或密码错误'}</p>
             <button type="submit">登录</button>
