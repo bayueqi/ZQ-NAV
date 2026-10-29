@@ -2776,11 +2776,11 @@ async exportConfig(request, env, ctx) {
           <form method="post" action="/admin" novalidate>
             <div class="field">
               <label for="username">用户名</label>
-              <input type="text" id="username" name="name" required autocomplete="username">
+              <input type="text" id="username" name="name" required autocomplete="username" placeholder="admin">
             </div>
             <div class="field">
               <label for="password">密码</label>
-              <input type="password" id="password" name="password" required autocomplete="current-password">
+              <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="admin">
             </div>
             <p class="err"${hasError ? '' : ' style="display:none;"'}>${hasError ? safeMessage : '用户名或密码错误'}</p>
             <button type="submit">登录</button>
