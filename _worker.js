@@ -1582,12 +1582,9 @@ async exportConfig(request, env, ctx) {
                         <div class="batch-bar" id="batchBar">
                           <span class="batch-count" id="batchCount">已选 0 项</span>
                           <button type="button" class="batch-btn" id="batchPickAll">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
-                            全选
-                          </button>
-                          <button type="button" class="batch-btn" id="batchClearBtn">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-                            取消全选
+                            <svg id="batchPickIconAll" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+                            <svg id="batchPickIconClear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" style="display:none"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                            <span id="batchPickAllText">全选</span>
                           </button>
                           <button type="button" class="batch-btn" id="batchMoveBtn">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" /></svg>
@@ -2545,7 +2542,13 @@ async exportConfig(request, env, ctx) {
               selectAllPage.indeterminate = picked > 0 && picked < pageIds.length;
             }
             if (batchPickAll) {
-              batchPickAll.style.display = totalItems > count ? '' : 'none';
+              const allPicked = totalItems > 0 && count >= totalItems;
+              const pickText = document.getElementById('batchPickAllText');
+              const iconAll = document.getElementById('batchPickIconAll');
+              const iconClear = document.getElementById('batchPickIconClear');
+              if (pickText) pickText.textContent = allPicked ? '取消全选' : '全选';
+              if (iconAll) iconAll.style.display = allPicked ? 'none' : '';
+              if (iconClear) iconClear.style.display = allPicked ? '' : 'none';
             }
             if (batchMoveTitle) batchMoveTitle.textContent = '迁移 ' + count + ' 个网站到';
             if (batchDeleteTitle) batchDeleteTitle.textContent = '删除 ' + count + ' 个网站？';
@@ -2562,6 +2565,11 @@ async exportConfig(request, env, ctx) {
 
           if (batchPickAll) {
             batchPickAll.addEventListener('click', function() {
+              if (totalItems > 0 && selectedIds.size >= totalItems) {
+                selectedIds.clear();
+                renderConfig(allConfigs);
+                return;
+              }
               const qs = [];
               if (selectedCategory) qs.push('catalog=' + encodeURIComponent(selectedCategory));
               if (currentSearchKeyword) qs.push('keyword=' + encodeURIComponent(currentSearchKeyword));
@@ -2574,14 +2582,6 @@ async exportConfig(request, env, ctx) {
                   ids.forEach(id => selectedIds.add(String(id)));
                   renderConfig(allConfigs);
                 }).catch(() => showMessage('网络错误', 'error'));
-            });
-          }
-
-          const batchClearBtn = document.getElementById('batchClearBtn');
-          if (batchClearBtn) {
-            batchClearBtn.addEventListener('click', function() {
-              selectedIds.clear();
-              renderConfig(allConfigs);
             });
           }
 
