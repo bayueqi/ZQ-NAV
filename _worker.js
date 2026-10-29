@@ -1581,7 +1581,10 @@ async exportConfig(request, env, ctx) {
                       <div class="config-main">
                         <div class="batch-bar" id="batchBar">
                           <span class="batch-count" id="batchCount">已选 0 项</span>
-                          <button type="button" class="batch-pick-all" id="batchPickAll">选择全部</button>
+                          <button type="button" class="batch-btn" id="batchPickAll">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+                            <span id="batchPickAllText">选择全部</span>
+                          </button>
                           <button type="button" class="batch-btn" id="batchMoveBtn">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" /></svg>
                             迁移分类
@@ -1598,7 +1601,7 @@ async exportConfig(request, env, ctx) {
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" /></svg>
                             删除所选
                           </button>
-                          <button type="button" class="batch-clear" id="batchClearBtn">
+                          <button type="button" class="batch-btn batch-clear" id="batchClearBtn">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
                             取消
                           </button>
@@ -1767,18 +1770,13 @@ async exportConfig(request, env, ctx) {
     .batch-bar.visible { display: flex; }
     .batch-count { display: inline-flex; align-items: center; gap: 7px; padding-right: 12px; margin-right: 2px; border-right: 1px solid #e9eef6; font-weight: 600; color: #2f4a67; }
     .batch-count::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #4d7cab; }
-    .batch-pick-all { display: inline-flex; align-items: center; height: 28px; padding: 0 11px; border: 1px solid #cddcee; border-radius: 999px; background: #f3f7fc; color: #3e6b9b; font-family: inherit; font-size: 0.8rem; font-weight: 500; cursor: pointer; transition: background 0.18s ease, border-color 0.18s ease; }
-    .batch-pick-all:hover { background: #e9f1fa; border-color: #b3c9e2; filter: none; transform: none; }
     .batch-btn { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border: 1px solid #dbe2ec; border-radius: 8px; background: #fff; color: #33465e; font-family: inherit; font-size: 0.8rem; font-weight: 500; cursor: pointer; transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease; }
     .batch-btn svg { width: 14px; height: 14px; opacity: 0.72; }
     .batch-btn:hover { background: #f7fafd; border-color: #b9c9dc; color: #2f4a67; filter: none; transform: none; }
     .batch-btn-danger { border-color: #e8cbc6; color: #a2402f; }
     .batch-btn-danger svg { opacity: 0.85; }
     .batch-btn-danger:hover { background: #fdf5f4; border-color: #dbb0a9; color: #8f3527; }
-    .batch-clear { display: inline-flex; align-items: center; gap: 3px; height: 28px; margin-left: auto; padding: 0 10px; border: 1px solid transparent; border-radius: 8px; background: none; color: #7a8899; font-family: inherit; font-size: 0.8rem; cursor: pointer; transition: background 0.18s ease, color 0.18s ease; }
-    .batch-clear svg { width: 13px; height: 13px; opacity: 0.8; }
-    .batch-clear:hover { background: #f2f5f9; color: #55657a; filter: none; transform: none; }
-    .batch-clear:hover { background: none; filter: none; transform: none; color: #3e6b9b; }
+    .batch-clear { margin-left: auto; }
     /* 单行显示，超出部分在格子里横向滑动，不换行、不撑高行 */
     td .cell { overflow-x: auto; overflow-y: hidden; white-space: nowrap; /* 常驻 3px 横向拖动条，只有内容溢出时才出现 */ /* 别加 scrollbar-width/color，会让下面 ::-webkit-scrollbar 全部失效 */ margin-bottom: -3px; }
     td .cell::-webkit-scrollbar { height: 3px; }
@@ -2550,7 +2548,8 @@ async exportConfig(request, env, ctx) {
             if (batchPickAll) {
               const showPickAll = totalItems > count;
               batchPickAll.style.display = showPickAll ? '' : 'none';
-              batchPickAll.textContent = '选择全部 ' + totalItems + ' 项';
+              const pickAllText = document.getElementById('batchPickAllText');
+              if (pickAllText) pickAllText.textContent = '选择全部 ' + totalItems + ' 项';
             }
             if (batchMoveTitle) batchMoveTitle.textContent = '迁移 ' + count + ' 个网站到';
             if (batchDeleteTitle) batchDeleteTitle.textContent = '删除 ' + count + ' 个网站？';
