@@ -38,11 +38,11 @@ async function writeSettings(env, patch) {
 }
 
 /**
- * 获取图标 API URL
+ * 获取图标 API URL（设置已就绪时同步取值）
 */
-async function getIconApiUrl(env, settings) {
-  const s = settings || await readSettings(env);
-  return s.favicon_api || env.FaviconApi || 'https://toolb.cn/favicon/{domain}';
+function getIconApiUrl(env, settings) {
+  const s = settings || {};
+  return s.favicon_api || (env && env.FaviconApi) || 'https://toolb.cn/favicon/{domain}';
 }
 
 /**
@@ -59,6 +59,16 @@ function fillInputValue(html, id, value) {
 }
 
 // 静态资源 ETag：内容不变时返回 304，省掉重复传输
+// Worker 实例内文件内容固定，每个文件只算一次哈希
+const STATIC_ETAGS = new Map();
+function staticEtag(filePath, text) {
+  let etag = STATIC_ETAGS.get(filePath);
+  if (!etag) {
+    etag = '"' + contentHash(text) + '"';
+    STATIC_ETAGS.set(filePath, etag);
+  }
+  return etag;
+}
 function contentHash(text) {
   let h = 5381;
   for (let i = 0; i < text.length; i++) {
@@ -67,16 +77,14 @@ function contentHash(text) {
   return (h >>> 0).toString(36) + '-' + text.length.toString(36);
 }
 
+// 单一正则做一遍替换，比连续五次 replace 少扫四遍字符串
+const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+
 function escapeHTML(input) {
   if (input === null || input === undefined) {
     return '';
   }
-  return String(input)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  return String(input).replace(/[&<>"']/g, (ch) => HTML_ESCAPES[ch]);
 }
 
 function sanitizeUrl(url) {
@@ -108,6 +116,11 @@ function json(data, status = 200, extraHeaders) {
     status,
     headers: Object.assign({ 'Content-Type': 'application/json' }, extraHeaders)
   });
+}
+
+// LIKE 查询前转义通配符，避免分类名或关键词里的 % _ 被当成通配
+function escapeLike(value) {
+  return String(value).replace(/[\\%_]/g, (ch) => '\\' + ch);
 }
 
 function normalizeSortOrder(value) {
@@ -323,24 +336,20 @@ function rollupCategoryCounts(nodes) {
 // 清理数据库中没有书签且没有子分类的孤儿分类节点
 async function cleanupOrphanCategories(env) {
   try {
-    // 删除没有书签且没有子分类的分类（递归清理）
+    // 删除没有书签且没有子分类的分类（由下往上，最多 8 层，防止异常数据导致死循环）
     let deleted = 0;
-    let keepGoing = true;
-    while (keepGoing) {
+    for (let round = 0; round < 8; round++) {
       const { results: orphans } = await env.NAV_DB.prepare(`
         SELECT c.id FROM categories c
         LEFT JOIN sites s ON s.catelog = c.path
         LEFT JOIN categories child ON child.parent_id = c.id
         WHERE s.id IS NULL AND child.id IS NULL
       `).all();
-      if (orphans.length === 0) {
-        keepGoing = false;
-      } else {
-        await env.NAV_DB.batch(orphans.map((orphan) => (
-          env.NAV_DB.prepare('DELETE FROM categories WHERE id = ?').bind(orphan.id)
-        )));
-        deleted += orphans.length;
-      }
+      if (!orphans || orphans.length === 0) break;
+      await env.NAV_DB.batch(orphans.map((orphan) => (
+        env.NAV_DB.prepare('DELETE FROM categories WHERE id = ?').bind(orphan.id)
+      )));
+      deleted += orphans.length;
     }
     return deleted;
   } catch (e) {
@@ -358,30 +367,40 @@ async function syncCategoryPath(env, catelogPath) {
   const parts = path.split('/').map(p => p.trim()).filter(p => p);
   if (parts.length === 0) return;
 
+  // 分类总量很小，一次取回全部路径，避免逐级查询往返
+  const byPath = new Map();
+  try {
+    const { results } = await env.NAV_DB.prepare('SELECT id, path FROM categories').all();
+    for (const row of results || []) byPath.set(row.path, row);
+  } catch (e) {
+    // 表不存在时按空处理，后面的插入会失败并被调用方捕获
+  }
+
   let currentParentId = 0;
   let currentPath = '';
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
     const parentPath = currentPath; // 加上本段前的路径 = 父级路径
     currentPath = currentPath ? currentPath + '/' + part : part;
-    const existing = await env.NAV_DB.prepare('SELECT id FROM categories WHERE path = ?').bind(currentPath).first();
+    const existing = byPath.get(currentPath);
     if (existing) {
       currentParentId = existing.id;
-    } else {
-      // 即将为父级（路径 parentPath）创建子分类；若是父级的第一个子分类，迁移父级直挂书签到 父级/默认
-      if (i > 0 && parentPath) {
-        await migrateDirectBookmarksToDefault(env, parentPath, currentParentId, part);
-      }
-      // 获取同级最大sort_order + 1
-      const maxSort = await env.NAV_DB.prepare(
-        'SELECT MAX(sort_order) as max_sort FROM categories WHERE parent_id = ?'
-      ).bind(currentParentId).first();
-      const sortOrder = (maxSort && maxSort.max_sort !== null) ? maxSort.max_sort + 1 : 0;
-      const result = await env.NAV_DB.prepare(
-        'INSERT INTO categories (name, parent_id, path, sort_order) VALUES (?, ?, ?, ?)'
-      ).bind(part, currentParentId, currentPath, sortOrder).run();
-      currentParentId = result.meta.last_row_id;
+      continue;
     }
+    // 即将为父级（路径 parentPath）创建子分类；若是父级的第一个子分类，迁移父级直挂书签到 父级/默认
+    if (i > 0 && parentPath) {
+      await migrateDirectBookmarksToDefault(env, parentPath, currentParentId, part);
+    }
+    // 获取同级最大sort_order + 1（migrate 可能刚插入"默认"节点，这里必须实时取）
+    const maxSort = await env.NAV_DB.prepare(
+      'SELECT MAX(sort_order) as max_sort FROM categories WHERE parent_id = ?'
+    ).bind(currentParentId).first();
+    const sortOrder = (maxSort && maxSort.max_sort !== null) ? maxSort.max_sort + 1 : 0;
+    const result = await env.NAV_DB.prepare(
+      'INSERT INTO categories (name, parent_id, path, sort_order) VALUES (?, ?, ?, ?)'
+    ).bind(part, currentParentId, currentPath, sortOrder).run();
+    currentParentId = result.meta.last_row_id;
+    byPath.set(currentPath, { id: currentParentId, path: currentPath });
   }
 }
 
@@ -407,9 +426,9 @@ async function migrateDirectBookmarksToDefault(env, parentPath, parentId, creati
   await env.NAV_DB.prepare('UPDATE sites SET catelog = ? WHERE catelog = ?').bind(defaultPath, parentPath).run();
 }
 
-async function isSubmissionEnabled(env, settings) {
-  const s = settings || await readSettings(env);
-  const value = s.submission || env.ENABLE_PUBLIC_SUBMISSION;
+function isSubmissionEnabled(env, settings) {
+  const s = settings || {};
+  const value = s.submission || (env && env.ENABLE_PUBLIC_SUBMISSION);
   if (value === undefined || value === null || value === '') {
     return true;
   }
@@ -479,14 +498,21 @@ async function validateAdminSession(request, env) {
     return { authenticated: false };
   }
   try {
+    // 顺带取出剩余秒数：只有过期过半才续期，避免每个请求都写一次 D1
     const session = await env.NAV_DB.prepare(
-      'SELECT token FROM admin_sessions WHERE token = ? AND expires_at > datetime(\'now\')'
+      `SELECT token, (julianday(expires_at) - julianday('now')) * 86400 AS remain
+       FROM admin_sessions WHERE token = ? AND expires_at > datetime('now')`
     ).bind(token).first();
     if (!session) {
       return { authenticated: false };
     }
-    // 会话有效，刷新过期时间（不await，不阻塞响应）
-    refreshAdminSession(env, token).catch(() => {});
+    if (!(session.remain > SESSION_TTL_SECONDS / 2)) {
+      try {
+        await refreshAdminSession(env, token);
+      } catch (e) {
+        // 续期失败不影响本次请求的鉴权结果
+      }
+    }
     return { authenticated: true, token };
   } catch (e) {
     return { authenticated: false };
@@ -518,6 +544,7 @@ async function isAdminAuthenticated(request, env) {
             if (path === '/config') {
                 switch (method) {
                     case 'GET':
+                        if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
                         return await this.getConfig(request, env, ctx, url);
                     case 'POST':
                         if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
@@ -527,7 +554,7 @@ async function isAdminAuthenticated(request, env) {
                 }
             }
             if (path === '/config/submit' && method === 'POST') {
-              if (!(await isSubmissionEnabled(env))) {
+              if (!isSubmissionEnabled(env, await readSettings(env))) {
                 return this.errorResponse('Public submission disabled', 403);
               }
               return await this.submitConfig(request, env, ctx);
@@ -622,61 +649,41 @@ async function isAdminAuthenticated(request, env) {
         }
     },
       async getConfig(request, env, ctx, url) {
-              const catalog = url.searchParams.get('catalog');
-              const page = parseInt(url.searchParams.get('page') || '1', 10);
-              const pageSize = parseInt(url.searchParams.get('pageSize') || '10', 10);
-              const keyword = url.searchParams.get('keyword');
-              const offset = (page - 1) * pageSize;
-                            try {
-                  //- [优化] 调整了SQL查询语句，增加了 sort_order 排序
-                  let query = `SELECT * FROM sites ORDER BY sort_order ASC, create_time DESC LIMIT ? OFFSET ?`;
-                  let countQuery = `SELECT COUNT(*) as total FROM sites`;
-                  let queryBindParams = [pageSize, offset];
-                  let countQueryParams = [];
-  
+              try {
+                  const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
+                  const pageSize = Math.min(200, Math.max(1, parseInt(url.searchParams.get('pageSize') || '10', 10) || 10));
+                  const offset = (page - 1) * pageSize;
+                  const catalog = (url.searchParams.get('catalog') || '').trim();
+                  const keyword = (url.searchParams.get('keyword') || '').trim();
+
+                  const conditions = [];
+                  const params = [];
                   if (catalog) {
                       // 包含该分类及其所有子分类
-                      const childPrefix = catalog + '/';
-                      query = `SELECT * FROM sites WHERE (catelog = ? OR catelog LIKE ?) ORDER BY sort_order ASC, create_time DESC LIMIT ? OFFSET ?`;
-                      countQuery = `SELECT COUNT(*) as total FROM sites WHERE (catelog = ? OR catelog LIKE ?)`;
-                      queryBindParams = [catalog, childPrefix + '%', pageSize, offset];
-                      countQueryParams = [catalog, childPrefix + '%'];
+                      conditions.push(`(catelog = ? OR catelog LIKE ? ESCAPE '\\')`);
+                      params.push(catalog, escapeLike(catalog) + '/%');
                   }
-  
                   if (keyword) {
-                      const likeKeyword = `%${keyword}%`;
-                      query = `SELECT * FROM sites WHERE name LIKE ? OR url LIKE ? OR catelog LIKE ? OR desc LIKE ? ORDER BY sort_order ASC, create_time DESC LIMIT ? OFFSET ?`;
-                      countQuery = `SELECT COUNT(*) as total FROM sites WHERE name LIKE ? OR url LIKE ? OR catelog LIKE ? OR desc LIKE ?`;
-                      queryBindParams = [likeKeyword, likeKeyword, likeKeyword, likeKeyword, pageSize, offset];
-                      countQueryParams = [likeKeyword, likeKeyword, likeKeyword, likeKeyword];
-
-                      if (catalog) {
-                          const childPrefix = catalog + '/';
-                          query = `SELECT * FROM sites WHERE (catelog = ? OR catelog LIKE ?) AND (name LIKE ? OR url LIKE ? OR catelog LIKE ? OR desc LIKE ?) ORDER BY sort_order ASC, create_time DESC LIMIT ? OFFSET ?`;
-                          countQuery = `SELECT COUNT(*) as total FROM sites WHERE (catelog = ? OR catelog LIKE ?) AND (name LIKE ? OR url LIKE ? OR catelog LIKE ? OR desc LIKE ?)`;
-                          queryBindParams = [catalog, childPrefix + '%', likeKeyword, likeKeyword, likeKeyword, likeKeyword, pageSize, offset];
-                          countQueryParams = [catalog, childPrefix + '%', likeKeyword, likeKeyword, likeKeyword, likeKeyword];
-                      }
+                      const like = '%' + escapeLike(keyword) + '%';
+                      conditions.push(`(name LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\' OR catelog LIKE ? ESCAPE '\\' OR "desc" LIKE ? ESCAPE '\\')`);
+                      params.push(like, like, like, like);
                   }
-  
+                  const whereSql = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
+
                   const [listRes, countResult] = await Promise.all([
-                      env.NAV_DB.prepare(query).bind(...queryBindParams).all(),
-                      env.NAV_DB.prepare(countQuery).bind(...countQueryParams).first()
+                      env.NAV_DB.prepare(`SELECT * FROM sites${whereSql} ORDER BY sort_order ASC, create_time DESC LIMIT ? OFFSET ?`)
+                          .bind(...params, pageSize, offset).all(),
+                      env.NAV_DB.prepare(`SELECT COUNT(*) as total FROM sites${whereSql}`)
+                          .bind(...params).first()
                   ]);
-                  const results = (listRes && listRes.results) || [];
-                  const total = countResult ? countResult.total : 0;
-  
-                return new Response(
-                  JSON.stringify({
+
+                  return json({
                       code: 200,
-                      data: results,
-                      total,
+                      data: (listRes && listRes.results) || [],
+                      total: countResult ? countResult.total : 0,
                       page,
                       pageSize
-                  }),
-                  { headers: { 'Content-Type': 'application/json' } }
-              );
-              
+                  });
               } catch (e) {
                   return this.errorResponse(`Failed to fetch config data: ${e.message}`, 500)
               }
@@ -829,9 +836,7 @@ async function isAdminAuthenticated(request, env) {
         },
        async submitConfig(request, env, ctx) {
           try{
-              if (!(await isSubmissionEnabled(env))) {
-                  return this.errorResponse('Public submission disabled', 403);
-              }
+              // 投稿开关统一在路由层校验，这里不再重复读设置
               const config = await request.json();
               const { name, url, logo, desc, catelog } = config;
               const sanitizedName = (name || '').trim();
@@ -1003,6 +1008,7 @@ async function isAdminAuthenticated(request, env) {
           }
 
           // 文件里可能自带重复 url：同一个 url 只保留最后出现的那条（后面的覆盖前面的）
+          // 没有 url 的记录无法入库（url 是 NOT NULL），直接跳过
           const lastUrlAt = new Map();
           sitesToImport.forEach((item, i) => {
               const u = (item.url || '').trim();
@@ -1010,8 +1016,12 @@ async function isAdminAuthenticated(request, env) {
           });
           const rows = sitesToImport.filter((item, i) => {
               const u = (item.url || '').trim();
-              return !u || lastUrlAt.get(u) === i;
+              if (!u) return false;
+              return lastUrlAt.get(u) === i;
           });
+          if (rows.length === 0) {
+              return json({ code: 200, message: '文件中没有可导入的记录（缺少 url）。' });
+          }
 
           const urls = rows.map(item => (item.url || '').trim()).filter(url => url);
           if (urls.length > 0) {
@@ -1033,11 +1043,12 @@ async function isAdminAuthenticated(request, env) {
 
           let nextSort = 1;
           const insertStatements = ordered.map(item => {
-                const sanitizedName = (item.name || '').trim() || null;
-                const sanitizedUrl = (item.url || '').trim() || null;
+                const sanitizedUrl = (item.url || '').trim();
+                // name / catelog 都是 NOT NULL，缺省时按 url 与默认分类兜底，避免整批导入失败
+                const sanitizedName = (item.name || '').trim() || sanitizedUrl;
                 const sanitizedLogo = (item.logo || '').trim() || null;
                 const sanitizedDesc = (item.desc || '').trim() || null;
-                const sanitizedCatelog = (item.catelog || '').trim() || null;
+                const sanitizedCatelog = (item.catelog || '').trim() || DEFAULT_CATALOG;
                 while (usedSort.has(nextSort)) nextSort += 1;
                 const sortOrderValue = nextSort++;
                 return env.NAV_DB.prepare(`
@@ -1424,8 +1435,8 @@ async exportConfig(request, env, ctx) {
       async getSettings(request, env, ctx) {
           try {
               const s = await readSettings(env);
-              const faviconApi = await getIconApiUrl(env, s);
-              const submission = await isSubmissionEnabled(env, s);
+              const faviconApi = getIconApiUrl(env, s);
+              const submission = isSubmissionEnabled(env, s);
               return json({ code: 200, data: {
                   admin_user: s.admin_user, favicon_api: faviconApi, submission: submission ? 'true' : 'false',
                   site_title: s.site_title, site_subtitle: s.site_subtitle
@@ -1532,7 +1543,7 @@ async exportConfig(request, env, ctx) {
   
         try {
             const fileContent = await this.getFileContent(filePath)
-            const etag = '"' + contentHash(fileContent) + '"';
+            const etag = staticEtag(filePath, fileContent);
             if (request.headers.get('If-None-Match') === etag) {
                 return new Response(null, {
                     status: 304,
@@ -2375,35 +2386,7 @@ async exportConfig(request, env, ctx) {
             selectedIds.clear();
             renderCategorySidebar();
             currentPage = 1;
-            if (category === '') {
-              fetchConfigs(1, currentSearchKeyword);
-            } else {
-              fetchConfigsByCategory(category, 1);
-            }
-          }
-
-          function fetchConfigsByCategory(category, page) {
-            let url = '/api/config?page=' + page + '&pageSize=' + pageSize + '&catalog=' + encodeURIComponent(category);
-            if (currentSearchKeyword) {
-              url = '/api/config?page=' + page + '&pageSize=' + pageSize + '&catalog=' + encodeURIComponent(category) + '&keyword=' + encodeURIComponent(currentSearchKeyword);
-            }
-            fetch(url)
-              .then(res => res.json())
-              .then(data => {
-                if (data.code === 200) {
-                  totalItems = data.total;
-                  currentPage = data.page;
-                  totalPagesSpan.innerText = Math.max(1, Math.ceil(totalItems / pageSize));
-                  currentPageSpan.innerText = currentPage;
-                  allConfigs = data.data;
-                  renderConfig(allConfigs);
-                  updatePaginationButtons();
-                } else {
-                  showMessage(data.message, 'error');
-                }
-              }).catch(() => {
-                showMessage('网络错误', 'error');
-              });
+            fetchConfigs(1, currentSearchKeyword);
           }
 
           if (toggleCategorySidebarBtn) {
@@ -2416,10 +2399,8 @@ async exportConfig(request, env, ctx) {
             });
           }
 
-          // 修改 fetchConfigs 以支持分类过滤
-          fetchConfigs = function(page, keyword) {
-            page = page || currentPage;
-            keyword = keyword !== undefined ? keyword : currentSearchKeyword;
+          // 书签列表：分类过滤 + 关键词搜索
+          function fetchConfigs(page = currentPage, keyword = currentSearchKeyword) {
             let url = '/api/config?page=' + page + '&pageSize=' + pageSize;
             if (selectedCategory) {
               url += '&catalog=' + encodeURIComponent(selectedCategory);
@@ -2427,9 +2408,16 @@ async exportConfig(request, env, ctx) {
             if (keyword) {
               url += '&keyword=' + encodeURIComponent(keyword);
             }
-            fetch(url)
-              .then(res => res.json())
+            fetch(url, { cache: 'no-store' })
+              .then(res => {
+                if (res.status === 401) {
+                  window.location.href = '/admin';
+                  return null;
+                }
+                return res.json();
+              })
               .then(data => {
+                if (!data) return;
                 if (data.code === 200) {
                   totalItems = data.total;
                   currentPage = data.page;
@@ -2444,7 +2432,7 @@ async exportConfig(request, env, ctx) {
               }).catch(() => {
                 showMessage('网络错误', 'error');
               });
-          };
+          }
 
           
           // 添加搜索框
@@ -2561,29 +2549,6 @@ async exportConfig(request, env, ctx) {
           });
           
           
-          function fetchConfigs(page = currentPage, keyword = currentSearchKeyword) {
-              let url = \`/api/config?page=\${page}&pageSize=\${pageSize}\`;
-              if(keyword) {
-                  url = \`/api/config?page=\${page}&pageSize=\${pageSize}&keyword=\${keyword}\`
-              }
-              fetch(url)
-                  .then(res => res.json())
-                  .then(data => {
-                      if (data.code === 200) {
-                          totalItems = data.total;
-                          currentPage = data.page;
-                                                 totalPagesSpan.innerText = Math.max(1, Math.ceil(totalItems / pageSize));
-                          currentPageSpan.innerText = currentPage;
-                          allConfigs = data.data; // 保存所有数据
-                          renderConfig(allConfigs);
-                          updatePaginationButtons();
-                      } else {
-                          showMessage(data.message, 'error');
-                      }
-                  }).catch(err => {
-                  showMessage('网络错误', 'error');
-              })
-          }
           function renderConfig(configs) {
           configTableBody.innerHTML = '';
            if (configs.length === 0) {
@@ -2805,8 +2770,7 @@ async exportConfig(request, env, ctx) {
                   const remain = Math.max(totalItems - done, 0);
                   targetPage = Math.min(currentPage, Math.max(1, Math.ceil(remain / pageSize)));
                 }
-                if (selectedCategory) fetchConfigsByCategory(selectedCategory, targetPage);
-                else fetchConfigs(targetPage, currentSearchKeyword);
+                fetchConfigs(targetPage, currentSearchKeyword);
                 loadCategorySidebar();
                 if (action === 'move') updateCatelogDatalist();
               }).catch(() => showMessage('网络错误', 'error'))
@@ -3134,7 +3098,7 @@ async exportConfig(request, env, ctx) {
   
     async renderAdminPage(env) {
     const settings = await readSettings(env);
-    const faviconApi = await getIconApiUrl(env, settings);
+    const faviconApi = getIconApiUrl(env, settings);
     let html = await this.getFileContent('admin.html');
     html = html
       .replace('const faviconApi = \'https://toolb.cn/favicon/{domain}\';', `const faviconApi = ${JSON.stringify(faviconApi)};`)
@@ -3216,7 +3180,7 @@ async exportConfig(request, env, ctx) {
     let siteSettings;
     try {
       const [sitesRes, catRes, settingsRes] = await Promise.all([
-        env.NAV_DB.prepare('SELECT * FROM sites ORDER BY sort_order ASC, create_time DESC').all(),
+        env.NAV_DB.prepare('SELECT id, name, url, logo, "desc", catelog, sort_order FROM sites ORDER BY sort_order ASC, create_time DESC').all(),
         env.NAV_DB.prepare('SELECT id, name, parent_id, path, sort_order FROM categories ORDER BY sort_order ASC, id ASC').all().catch(() => null),
         readSettings(env)
       ]);
@@ -3298,6 +3262,8 @@ async exportConfig(request, env, ctx) {
       return currentPath === ancestorPath || currentPath.startsWith(ancestorPath + '/');
     }
 
+    // 分类节点序号：中文路径经过替换后会得到相同的 id，这里按渲染顺序编号保证唯一
+    let catNodeSeq = 0;
     function renderFrontendCategoryTree(nodes, level) {
       return nodes.map(node => {
         const safeCat = escapeHTML(node.path);
@@ -3311,7 +3277,7 @@ async exportConfig(request, env, ctx) {
         const countBadge = (node.site_count > 0) ? `<span class="ml-auto text-xs text-gray-400">${node.site_count}</span>` : '';
         // 根级与"全部"对齐：左padding=12px，每深入一级缩进20px（一个toggle宽度）
         const rowPaddingLeft = 12 + (level * 20);
-        const childrenId = 'cat-children-' + safeCat.replace(/[^a-zA-Z0-9]/g, '_');
+        const childrenId = 'cat-children-' + (++catNodeSeq);
         
         let html = `
           <div class="cat-row" style="padding-left:${rowPaddingLeft}px">
@@ -3340,8 +3306,8 @@ async exportConfig(request, env, ctx) {
     const headingText = escapeHTML(headingPlainText);
     const headingDefaultAttr = escapeHTML(headingPlainText);
     const headingActiveAttr = catalogExists ? escapeHTML(currentCatalog) : '';
-    const submissionEnabled = await isSubmissionEnabled(env, siteSettings);
-    const faviconApi = await getIconApiUrl(env, siteSettings);
+    const submissionEnabled = isSubmissionEnabled(env, siteSettings);
+    const faviconApi = getIconApiUrl(env, siteSettings);
 
     // 优化后的 HTML
     const html = `
@@ -4155,17 +4121,22 @@ async exportConfig(request, env, ctx) {
 export default {
 async fetch(request, env, ctx) {
   const url = new URL(request.url);
-  
-  // 确保分类表存在并迁移数据
+
+  // 静态资源不读 D1，直接返回，省掉建表任务的等待
+  if (url.pathname.startsWith('/static/')) {
+    return admin.handleStatic(request, env, ctx);
+  }
+
+  // 确保分类表存在并迁移数据（实例内只执行一次）
   try {
     await ensureCategoriesTable(env);
   } catch(e) {
     console.error('ensureCategoriesTable error:', e);
   }
-  
+
   if (url.pathname.startsWith('/api')) {
     return api.handleRequest(request, env, ctx);
-  } else if (url.pathname === '/admin' || url.pathname.startsWith('/static')) {
+  } else if (url.pathname === '/admin') {
     return admin.handleRequest(request, env, ctx);
   } else {
     return handleRequest(request, env, ctx);
