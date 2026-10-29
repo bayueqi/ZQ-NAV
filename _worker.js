@@ -2736,7 +2736,7 @@ async exportConfig(request, env, ctx) {
       .replace('<input type="text" id="setTitle" placeholder="站点名称">', () => `<input type="text" id="setTitle" placeholder="站点名称" value="${escapeHTML(settings.site_title || '')}">`)
       .replace('<input type="text" id="setSubtitle" placeholder="显示在首页顶部">', () => `<input type="text" id="setSubtitle" placeholder="显示在首页顶部" value="${escapeHTML(settings.site_subtitle || '')}">`)
       .replace('<input type="text" id="setFavicon" placeholder="https://toolb.cn/favicon/{domain}">', () => `<input type="text" id="setFavicon" placeholder="https://toolb.cn/favicon/{domain}" value="${escapeHTML(settings.favicon_api || '')}">`)
-      .replace('<input type="text" id="setUser" autocomplete="username">', () => `<input type="text" id="setUser" autocomplete="username" value="${escapeHTML(settings.admin_user || '')}">`);
+      .replace('<input type="text" id="setUser" autocomplete="username">', () => `<input type="text" id="setUser" autocomplete="username" value="${escapeHTML(settings.admin_user || 'admin')}">`);
     return new Response(html, {
         headers: {'Content-Type': 'text/html; charset=utf-8'}
     });
