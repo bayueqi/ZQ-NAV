@@ -2678,54 +2678,39 @@ async exportConfig(request, env, ctx) {
         <title>管理员登录</title>
         <style>
           *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-          html, body { height: 100%; font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-          body { display: flex; justify-content: center; align-items: center; background: linear-gradient(135deg, #fdf8f3 0%, #f3f5f9 40%, #e8edf5 100%); background-attachment: fixed; padding: 1rem; position: relative; overflow: hidden; }
-          body::before { content: ''; position: absolute; width: 500px; height: 500px; border-radius: 50%; background: radial-gradient(circle, rgba(65, 109, 157, 0.08) 0%, transparent 70%); top: -100px; right: -100px; pointer-events: none; }
-          body::after { content: ''; position: absolute; width: 400px; height: 400px; border-radius: 50%; background: radial-gradient(circle, rgba(234, 160, 94, 0.08) 0%, transparent 70%); bottom: -80px; left: -80px; pointer-events: none; }
-          .login-container { background: rgba(255, 255, 255, 0.88); backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%); padding: 2.5rem 2rem; border-radius: 20px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0,0,0,0.05); border: 1px solid rgba(255,255,255,0.4); width: 100%; max-width: 380px; animation: slideUpFade 0.5s cubic-bezier(0.25, 0.8, 0.25, 1); position: relative; z-index: 1; }
-          @keyframes slideUpFade {
-            from { opacity: 0; transform: translateY(24px) scale(0.98); }
-            to { opacity: 1; transform: translateY(0) scale(1); }
-          }
-          .login-icon { width: 56px; height: 56px; margin: 0 auto 1.25rem; background: linear-gradient(135deg, #416d9d, #305580); border-radius: 16px; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 24px rgba(65, 109, 157, 0.3); }
-          .login-icon svg { width: 28px; height: 28px; color: white; }
-          .login-title { font-size: 1.5rem; font-weight: 700; text-align: center; margin: 0 0 0.5rem 0; color: #2d3748; }
-          .login-subtitle { text-align: center; color: #718096; font-size: 0.88rem; margin-bottom: 1.75rem; }
-          .form-group { margin-bottom: 1rem; }
-          label { display: block; margin-bottom: 0.4rem; font-weight: 500; color: #4a5568; font-size: 0.88rem; }
-          input[type="text"], input[type="password"] { width: 100%; padding: 0.75rem 1rem; border: 1.5px solid #e2e8f0; border-radius: 12px; font-size: 0.95rem; transition: all 0.2s ease; background: rgba(255,255,255,0.7); outline: none; }
-          input[type="text"]:focus, input[type="password"]:focus { border-color: #416d9d; box-shadow: 0 0 0 3px rgba(65, 109, 157, 0.12); background: #fff; }
-          button { width: 100%; padding: 0.8rem; background: linear-gradient(135deg, #416d9d, #305580); color: white; border: none; border-radius: 12px; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1); box-shadow: 0 4px 14px rgba(65, 109, 157, 0.35); margin-top: 0.5rem; }
-          button:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(65, 109, 157, 0.45); filter: brightness(1.05); }
-          button:active { transform: translateY(0) scale(0.98); }
-          .error-message { color: #e53e3e; font-size: 0.82rem; margin-top: 0.75rem; text-align: center; display: none; background: rgba(229, 62, 62, 0.08); padding: 0.5rem; border-radius: 8px; }
-          .back-link { display: block; text-align: center; margin-top: 1.25rem; color: #718096; text-decoration: none; font-size: 0.85rem; transition: color 0.2s; }
-          .back-link:hover { color: #416d9d; }
+          html, body { height: 100%; }
+          body { display: flex; align-items: center; justify-content: center; padding: 24px; background: #f6f3ee; color: #1f2933; font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+          .login { width: 100%; max-width: 344px; border-top: 3px solid #254267; padding-top: 28px; }
+          .login h1 { font-size: 1.1rem; font-weight: 600; letter-spacing: 0.01em; }
+          form { margin-top: 26px; }
+          .field + .field { margin-top: 16px; }
+          label { display: block; margin-bottom: 6px; font-size: 12px; color: #5d6b7a; letter-spacing: 0.04em; }
+          input { width: 100%; height: 42px; padding: 0 12px; border: 1px solid #d5dbe3; border-radius: 6px; background: #fff; color: #1f2933; font-size: 14px; font-family: inherit; outline: none; transition: border-color 0.15s ease; }
+          input:focus { border-color: #254267; }
+          .err { margin-top: 14px; font-size: 13px; color: #c0392b; }
+          button { width: 100%; height: 42px; margin-top: 22px; border: 0; border-radius: 6px; background: #254267; color: #fff; font-family: inherit; font-size: 14px; font-weight: 500; letter-spacing: 0.06em; cursor: pointer; transition: background 0.15s ease; }
+          button:hover { background: #1c3454; }
+          .back { display: block; margin-top: 28px; padding-top: 18px; border-top: 1px solid #e2e6ec; color: #5d6b7a; font-size: 13px; text-decoration: none; }
+          .back:hover { color: #254267; }
         </style>
       </head>
       <body>
-        <div class="login-container">
-          <div class="login-icon">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-            </svg>
-          </div>
-          <h1 class="login-title">管理员登录</h1>
-          <p class="login-subtitle">请输入账号密码以访问后台</p>
+        <main class="login">
+          <h1>管理员登录</h1>
           <form method="post" action="/admin" novalidate>
-            <div class="form-group">
+            <div class="field">
               <label for="username">用户名</label>
-              <input type="text" id="username" name="name" required autocomplete="username" placeholder="请输入用户名">
+              <input type="text" id="username" name="name" required autocomplete="username">
             </div>
-            <div class="form-group">
+            <div class="field">
               <label for="password">密码</label>
-              <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="请输入密码">
+              <input type="password" id="password" name="password" required autocomplete="current-password">
             </div>
-            ${hasError ? `<div class="error-message" style="display:block;">${safeMessage}</div>` : `<div class="error-message">用户名或密码错误</div>`}
-            <button type="submit">登 录</button>
+            <p class="err"${hasError ? '' : ' style="display:none;"'}>${hasError ? safeMessage : '用户名或密码错误'}</p>
+            <button type="submit">登录</button>
           </form>
-          <a href="/" class="back-link">← 返回首页</a>
-        </div>
+          <a href="/" class="back">返回首页</a>
+        </main>
       </body>
       </html>`;
       
