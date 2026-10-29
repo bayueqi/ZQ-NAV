@@ -49,6 +49,15 @@ async function getIconApiUrl(env, settings) {
  * 渲染单个网站卡片（优化版）
  */
 
+// 静态资源 ETag：内容不变时返回 304，省掉重复传输
+function contentHash(text) {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) {
+    h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(36) + '-' + text.length.toString(36);
+}
+
 function escapeHTML(input) {
   if (input === null || input === undefined) {
     return '';
@@ -1410,8 +1419,15 @@ async exportConfig(request, env, ctx) {
   
         try {
             const fileContent = await this.getFileContent(filePath)
+            const etag = '"' + contentHash(fileContent) + '"';
+            if (request.headers.get('If-None-Match') === etag) {
+                return new Response(null, {
+                    status: 304,
+                    headers: { 'ETag': etag, 'Cache-Control': 'no-cache' }
+                });
+            }
             return new Response(fileContent, {
-              headers: { 'Content-Type': contentType }
+              headers: { 'Content-Type': contentType, 'ETag': etag, 'Cache-Control': 'no-cache' }
             });
         } catch (e) {
            return new Response('Not Found', {status: 404});
@@ -1575,7 +1591,7 @@ async exportConfig(request, env, ctx) {
         from { opacity: 0; }
         to { opacity: 1; }
     }
-    .modal-content { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); margin: 8% auto; padding: 24px; border: 1px solid rgba(255,255,255,0.3); width: 85%; max-width: 560px; border-radius: 16px; position: relative; box-shadow: 0 20px 60px rgba(0,0,0,0.2); animation: slideUp 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
+    .modal-content { background: #ffffff; margin: 8% auto; padding: 24px; border: 1px solid #e6e8ec; width: 85%; max-width: 560px; border-radius: 12px; position: relative; box-shadow: 0 12px 40px rgba(16, 24, 40, 0.16); animation: slideUp 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
     @keyframes slideUp {
         from { opacity: 0; transform: translateY(20px); }
         to { opacity: 1; transform: translateY(0); }
@@ -1589,8 +1605,7 @@ async exportConfig(request, env, ctx) {
     .modal-content form input:focus { border-color: #4d7cab; box-shadow: 0 0 0 3px rgba(65, 109, 157, 0.12); background: #fff; }
     .modal-content button[type='submit'] { margin-top: 8px; background: #3e6b9b; color: #fff; border: none; padding: 10px 18px; border-radius: 10px; cursor: pointer; font-size: 0.95rem; font-weight: 500; transition: background 0.2s ease; }
     .modal-content button[type='submit']:hover { background: #355d88; }
-    .modal-content button[type='submit']:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(65, 109, 157, 0.4); }
-.container { max-width: 1280px; margin: 0 auto; background: rgba(255, 255, 255, 0.82); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%); padding: 24px; border-radius: 20px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12); border: 1px solid rgba(255,255,255,0.3); }
+.container { max-width: 1280px; margin: 0 auto; background: rgba(255, 255, 255, 0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); padding: 24px; border-radius: 16px; box-shadow: 0 4px 24px rgba(16, 24, 40, 0.06); border: 1px solid rgba(226, 232, 240, 0.9); }
     .admin-header { display: flex; flex-direction: column; gap: 16px; margin-bottom: 24px; }
     .admin-header-left { flex: 1; }
     @media (min-width: 768px) {
@@ -1600,7 +1615,7 @@ async exportConfig(request, env, ctx) {
     
     /* 工具栏图标按钮 */
     .admin-toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
-    .toolbar-btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border: 1px solid transparent; border-radius: 12px; cursor: pointer; font-size: 0.88rem; font-weight: 600; background: #fff; color: #3e6b9b; transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease; box-shadow: 0 1px 2px rgba(48, 85, 128, 0.06); }
+    .toolbar-btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; font-size: 0.88rem; font-weight: 600; background: #fff; color: #3e6b9b; transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease; box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04); }
     .toolbar-btn svg { width: 18px; height: 18px; flex-shrink: 0; }
     .toolbar-btn:hover { box-shadow: 0 3px 10px rgba(48, 85, 128, 0.12); }
     .toolbar-btn:active { transform: translateY(1px); }
@@ -1631,7 +1646,7 @@ async exportConfig(request, env, ctx) {
 
     #message { border-radius: 8px; padding: 10px 14px; font-size: 13px; animation: slideDown 0.3s ease; }
 
-    #config { border: 1px solid rgba(226, 232, 240, 0.6); border-radius: 16px; padding: 12px; background: rgba(255,255,255,0.4); }
+    #config { border: 1px solid #e6e8ec; border-radius: 12px; padding: 12px; background: #fff; }
     
     @keyframes slideDown {
         from { opacity: 0; transform: translateY(-12px); }
@@ -3089,8 +3104,8 @@ async exportConfig(request, env, ctx) {
         .glass-footer { background: rgba(255, 255, 255, 0.5) !important; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-top: 1px solid rgba(255, 255, 255, 0.5) !important; }
         
         /* 返回顶部按钮 */
-        .back-top-btn { background: rgba(60, 151, 109, 0.9) !important; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: 0 4px 20px rgba(60, 151, 109, 0.3); transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
-        .back-top-btn:hover { background: rgba(46, 119, 85, 0.95) !important; transform: translateY(-2px); box-shadow: 0 6px 24px rgba(60, 151, 109, 0.4); }
+        .back-top-btn { background: rgba(77, 124, 171, 0.92) !important; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: 0 4px 20px rgba(16, 24, 40, 0.14); transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
+        .back-top-btn:hover { background: rgba(53, 93, 136, 0.96) !important; transform: translateY(-2px); box-shadow: 0 6px 24px rgba(16, 24, 40, 0.18); }
         .back-top-btn.visible { opacity: 1 !important; visibility: visible !important; }
         
         /* 移动端遮罩层平滑 */
@@ -3106,7 +3121,7 @@ async exportConfig(request, env, ctx) {
         .hero-header::after { content: ''; position: absolute; bottom: -30%; left: -10%; width: 400px; height: 400px; background: radial-gradient(circle, rgba(97, 180, 138, 0.1) 0%, transparent 70%); pointer-events: none; }
         
         /* 毛玻璃统计卡片 */
-        .glass-stats { background: rgba(255, 255, 255, 0.12) !important; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.15) !important; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1); }
+        .glass-stats { background: rgba(255, 255, 255, 0.14) !important; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.22) !important; box-shadow: 0 6px 20px rgba(16, 24, 40, 0.08); }
         
         /* 复制成功提示 */
         @keyframes fadeInOut {
