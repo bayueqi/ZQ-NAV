@@ -1280,13 +1280,9 @@ async exportConfig(request, env, ctx) {
               const patch = {};
               const user = String(body.admin_user || '').trim();
               if (user) patch.admin_user = user;
-              // 改密码要先过当前密码，避免会话被别人接手后直接换掉
+              // 改密码：仅需已登录的会话
               const nextPass = String(body.admin_pass || '').trim();
               if (nextPass) {
-                  const s = await readSettings(env);
-                  if (String(body.current_pass || '') !== (s.admin_pass || SETTINGS_DEFAULTS.admin_pass)) {
-                      return this.errorResponse('当前密码不正确', 400);
-                  }
                   if (nextPass.length < 4) return this.errorResponse('新密码至少 4 位', 400);
                   patch.admin_pass = nextPass;
               }
@@ -1463,13 +1459,12 @@ async exportConfig(request, env, ctx) {
                 <label for="setSubtitle">副标题</label>
                 <input type="text" id="setSubtitle" placeholder="显示在首页顶部">
                 <label for="setFavicon">图标 API</label>
-                <input type="text" id="setFavicon" placeholder="https://toolb.cn/favicon/{domain}">
+                <input type="text" id="setFavicon" placeholder="默认 https://toolb.cn/favicon/{domain}">
                 <label for="setUser">管理员账号</label>
                 <input type="text" id="setUser" autocomplete="username">
-                <label for="setCurrentPass">当前密码</label>
-                <input type="password" id="setCurrentPass" autocomplete="current-password" placeholder="修改密码时填写">
                 <label for="setNewPass">新密码</label>
                 <input type="password" id="setNewPass" autocomplete="new-password" placeholder="不修改就留空">
+                <p class="settings-error" id="settingsError" style="display:none;"></p>
                 <button type="submit">保存</button>
               </form>
             </div>
@@ -1587,6 +1582,7 @@ async exportConfig(request, env, ctx) {
     .confirm-btn:hover { background: #f7fafc; border-color: #d5dbe3; }
     .confirm-btn-danger { background: #b42318; border-color: #b42318; color: #fff; }
     .confirm-btn-danger:hover { background: #96180f; border-color: #96180f; color: #fff; }
+    .settings-error { margin: 4px 0 0; padding: 8px 10px; border-radius: 8px; background: #fdf2f2; color: #b42318; font-size: 0.85rem; line-height: 1.4; }
     @media (max-width: 480px) {
         .toolbar-btn span { display: none; }
         .toolbar-btn { padding: 10px 12px; border-radius: 10px; }
@@ -2610,8 +2606,8 @@ async exportConfig(request, env, ctx) {
           const settingsForm = document.getElementById('settingsForm');
 
           function openSettings() {
-            document.getElementById('setCurrentPass').value = '';
             document.getElementById('setNewPass').value = '';
+            document.getElementById('settingsError').style.display = 'none';
             settingsModal.style.display = 'block';
           }
 
@@ -2624,6 +2620,12 @@ async exportConfig(request, env, ctx) {
           if (settingsForm) {
             settingsForm.addEventListener('submit', function (e) {
               e.preventDefault();
+              var errorBox = document.getElementById('settingsError');
+              errorBox.style.display = 'none';
+              function fail(msg) {
+                errorBox.textContent = msg;
+                errorBox.style.display = 'block';
+              }
               var payload = {
                 site_title: document.getElementById('setTitle').value,
                 site_subtitle: document.getElementById('setSubtitle').value,
@@ -2633,7 +2635,6 @@ async exportConfig(request, env, ctx) {
               var newPass = document.getElementById('setNewPass').value.trim();
               if (newPass) {
                 payload.admin_pass = newPass;
-                payload.current_pass = document.getElementById('setCurrentPass').value;
               }
               fetch('/api/settings', {
                 method: 'POST',
@@ -2646,9 +2647,9 @@ async exportConfig(request, env, ctx) {
                     settingsModal.style.display = 'none';
                     setTimeout(function () { window.location.reload(); }, 700);
                   } else {
-                    showMessage(data.message || '保存失败', 'error');
+                    fail(data.message || '保存失败');
                   }
-                }).catch(function () { showMessage('网络错误', 'error'); });
+                }).catch(function () { fail('网络错误，请稍后重试'); });
             });
           }
           `
