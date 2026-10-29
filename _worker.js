@@ -593,6 +593,14 @@ async function isAdminAuthenticated(request, env) {
                         return this.errorResponse('Method Not Allowed', 405)
                 }
             }
+            if (path === '/config/batch' && method === 'POST') {
+                if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
+                return await this.batchConfig(request, env, ctx);
+            }
+            if (path === '/config/ids' && method === 'GET') {
+                if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
+                return await this.getConfigIds(request, env, url);
+            }
             if (path === '/config/import' && method === 'POST') {
                 if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
                 return await this.importConfig(request, env, ctx);
@@ -673,6 +681,82 @@ async function isAdminAuthenticated(request, env) {
                   return this.errorResponse(`Failed to fetch config data: ${e.message}`, 500)
               }
           },
+      // 批量操作：批量迁移分类 / 批量删除
+      async batchConfig(request, env, ctx) {
+        try {
+          const body = await request.json().catch(() => ({}));
+          const action = String(body.action || '');
+          const ids = Array.from(new Set(
+            (Array.isArray(body.ids) ? body.ids : [])
+              .map(v => parseInt(v, 10))
+              .filter(v => Number.isInteger(v) && v > 0)
+          ));
+          if (ids.length === 0) return this.errorResponse('未选择任何书签', 400);
+          if (ids.length > 1000) return this.errorResponse('单次最多处理 1000 条', 400);
+          if (action !== 'move' && action !== 'delete') return this.errorResponse('不支持的操作', 400);
+
+          const CHUNK = 50;
+          let affected = 0;
+          if (action === 'move') {
+            const target = String(body.catelog || '').trim();
+            if (!target) return this.errorResponse('请选择目标分类', 400);
+            await syncCategoryPath(env, target);
+            for (let i = 0; i < ids.length; i += CHUNK) {
+              const chunk = ids.slice(i, i + CHUNK);
+              const marks = chunk.map(() => '?').join(',');
+              const res = await env.NAV_DB.prepare(
+                `UPDATE sites SET catelog = ?, update_time = CURRENT_TIMESTAMP WHERE id IN (${marks})`
+              ).bind(target, ...chunk).run();
+              affected += (res && res.meta && typeof res.meta.changes === 'number') ? res.meta.changes : 0;
+            }
+          } else {
+            for (let i = 0; i < ids.length; i += CHUNK) {
+              const chunk = ids.slice(i, i + CHUNK);
+              const marks = chunk.map(() => '?').join(',');
+              const res = await env.NAV_DB.prepare(
+                `DELETE FROM sites WHERE id IN (${marks})`
+              ).bind(...chunk).run();
+              affected += (res && res.meta && typeof res.meta.changes === 'number') ? res.meta.changes : 0;
+            }
+            try { await cleanupOrphanCategories(env); } catch (e) {}
+          }
+          return new Response(JSON.stringify({
+            code: 200,
+            message: action === 'move' ? '已迁移' : '已删除',
+            data: { affected }
+          }), { headers: { 'Content-Type': 'application/json' } });
+        } catch (e) {
+          return this.errorResponse(`批量操作失败: ${e.message}`, 500);
+        }
+      },
+      // 按当前筛选条件返回全部书签 id，供"选择全部"使用
+      async getConfigIds(request, env, url) {
+        try {
+          const catalog = (url.searchParams.get('catalog') || '').trim();
+          const keyword = (url.searchParams.get('keyword') || '').trim();
+          const where = [];
+          const params = [];
+          if (catalog) {
+            where.push('(catelog = ? OR catelog LIKE ?)');
+            params.push(catalog, catalog + '/%');
+          }
+          if (keyword) {
+            const like = `%${keyword}%`;
+            where.push('(name LIKE ? OR url LIKE ? OR catelog LIKE ? OR desc LIKE ?)');
+            params.push(like, like, like, like);
+          }
+          let sql = 'SELECT id FROM sites';
+          if (where.length) sql += ' WHERE ' + where.join(' AND ');
+          sql += ' ORDER BY sort_order ASC, create_time DESC';
+          const { results } = await env.NAV_DB.prepare(sql).bind(...params).all();
+          const ids = (results || []).map(r => r.id);
+          return new Response(JSON.stringify({ code: 200, data: ids, total: ids.length }), {
+            headers: { 'Content-Type': 'application/json' }
+          });
+        } catch (e) {
+          return this.errorResponse(`读取书签列表失败: ${e.message}`, 500);
+        }
+      },
       async getPendingConfig(request, env, ctx, url) {
             const page = parseInt(url.searchParams.get('page') || '1', 10);
             const pageSize = parseInt(url.searchParams.get('pageSize') || '10', 10);
@@ -987,13 +1071,29 @@ async function isAdminAuthenticated(request, env) {
   
 async exportConfig(request, env, ctx) {
         try{
-          const { results } = await env.NAV_DB.prepare('SELECT * FROM sites ORDER BY sort_order ASC, create_time DESC').all();
+          const url = new URL(request.url);
+          const rawIds = (url.searchParams.get('ids') || '').trim();
+          let results = [];
+          let filename = 'config.json';
+          if (rawIds) {
+            const ids = Array.from(new Set(rawIds.split(',').map(v => parseInt(v, 10)).filter(v => Number.isInteger(v) && v > 0)));
+            if (ids.length === 0) return this.errorResponse('未选择任何书签', 400);
+            const marks = ids.map(() => '?').join(',');
+            const res = await env.NAV_DB.prepare(
+              `SELECT * FROM sites WHERE id IN (${marks}) ORDER BY sort_order ASC, create_time DESC`
+            ).bind(...ids).all();
+            results = res.results || [];
+            filename = 'config-selected.json';
+          } else {
+            const res = await env.NAV_DB.prepare('SELECT * FROM sites ORDER BY sort_order ASC, create_time DESC').all();
+            results = res.results || [];
+          }
           const pureJsonData = JSON.stringify(results, null, 2); 
 
           return new Response(pureJsonData, {
               headers: {
                 'Content-Type': 'application/json; charset=utf-8',
-                'Content-Disposition': 'attachment; filename="config.json"'
+                'Content-Disposition': `attachment; filename="${filename}"`
               }
           });
         } catch(e) {
@@ -1541,6 +1641,27 @@ async exportConfig(request, env, ctx) {
               </div>
             </div>
           </div>
+          <div class="modal" id="batchMoveModal" style="display:none;">
+            <div class="modal-content">
+              <span class="modal-close" id="batchMoveClose">×</span>
+              <h2 id="batchMoveTitle">迁移分类</h2>
+              <input type="hidden" id="batchCatelog">
+              <div id="batchCatelogCascader" class="cascader-host"></div>
+              <div class="confirm-actions">
+                <button type="button" class="confirm-btn" id="batchMoveCancel">取消</button>
+                <button type="button" class="confirm-btn confirm-btn-primary" id="batchMoveConfirm">迁移</button>
+              </div>
+            </div>
+          </div>
+          <div class="modal" id="batchDeleteModal" style="display:none;">
+            <div class="modal-content modal-confirm">
+              <h2 id="batchDeleteTitle">删除书签</h2>
+              <div class="confirm-actions">
+                <button type="button" class="confirm-btn" id="batchDeleteCancel">取消</button>
+                <button type="button" class="confirm-btn confirm-btn-danger" id="batchDeleteConfirm">删除</button>
+              </div>
+            </div>
+          </div>
          <div id="config">
                     <div class="config-layout">
                       <aside class="category-sidebar collapsed">
@@ -1557,10 +1678,19 @@ async exportConfig(request, env, ctx) {
                         </ul>
                       </aside>
                       <div class="config-main">
+                        <div class="batch-bar" id="batchBar">
+                          <span class="batch-count" id="batchCount">已选 0 项</span>
+                          <button type="button" class="batch-pick-all" id="batchPickAll">选择全部</button>
+                          <button type="button" class="batch-btn" id="batchMoveBtn">迁移分类</button>
+                          <button type="button" class="batch-btn" id="batchExportBtn">导出选中</button>
+                          <button type="button" class="batch-btn batch-btn-danger" id="batchDeleteBtn">删除</button>
+                          <button type="button" class="batch-clear" id="batchClearBtn">取消</button>
+                        </div>
                         <div class="table-wrapper">
                         <table id="configTable">
                             <thead>
                                 <tr>
+                                  <th class="col-select"><input type="checkbox" id="selectAllPage" title="全选本页"></th>
                                   <th>名称</th>
                                   <th>网址</th>
                                   <th>图标</th>
@@ -1645,6 +1775,8 @@ async exportConfig(request, env, ctx) {
     .confirm-btn:hover { background: #f7fafc; border-color: #d5dbe3; }
     .confirm-btn-danger { background: #b8443a; border-color: #b8443a; color: #fff; }
     .confirm-btn-danger:hover { background: #a13a31; border-color: #a13a31; color: #fff; }
+    .confirm-btn-primary { background: #3e6b9b; border-color: #3e6b9b; color: #fff; }
+    .confirm-btn-primary:hover { background: #355d88; border-color: #355d88; color: #fff; }
     .settings-error { margin: 4px 0 0; padding: 8px 10px; border-radius: 8px; background: #fdf2f2; color: #b42318; font-size: 0.85rem; line-height: 1.4; }
     @media (max-width: 480px) {
         .toolbar-btn span { display: none; }
@@ -1700,14 +1832,31 @@ async exportConfig(request, env, ctx) {
     .table-wrapper { overflow: auto; border-radius: 12px; flex: 1 1 auto; min-height: 0; }
     table { width: 100%; min-width: 1080px; table-layout: fixed; border-collapse: separate; border-spacing: 0; margin-bottom: 16px; border-radius: 12px; overflow: hidden; }
     th, td { border-bottom: 1px solid rgba(226, 232, 240, 0.6); padding: 12px 14px; text-align: left; color: #4a5568; white-space: nowrap; }
-    /* 固定列宽：名称 / 网址 / 图标 / 描述 / 分类 / 排序 / 操作 */
-    #configTable th:nth-child(1) { width: 120px; }
-    #configTable th:nth-child(2) { width: 220px; }
-    #configTable th:nth-child(3) { width: 60px; }
-    #configTable th:nth-child(4) { width: 180px; }
-    #configTable th:nth-child(5) { width: 110px; }
-    #configTable th:nth-child(6) { width: 56px; }
-    #configTable th:nth-child(7) { width: 130px; }
+    /* 固定列宽：勾选 / 名称 / 网址 / 图标 / 描述 / 分类 / 排序 / 操作 */
+    #configTable th:nth-child(1) { width: 40px; }
+    #configTable th:nth-child(2) { width: 120px; }
+    #configTable th:nth-child(3) { width: 220px; }
+    #configTable th:nth-child(4) { width: 60px; }
+    #configTable th:nth-child(5) { width: 180px; }
+    #configTable th:nth-child(6) { width: 110px; }
+    #configTable th:nth-child(7) { width: 56px; }
+    #configTable th:nth-child(8) { width: 130px; }
+    .col-select { width: 40px; padding-left: 12px !important; padding-right: 6px !important; text-align: center; }
+    .col-select input[type="checkbox"] { width: 15px; height: 15px; margin: 0; accent-color: #3e6b9b; cursor: pointer; vertical-align: middle; }
+    tbody tr.selected { background: rgba(77, 124, 171, 0.08); }
+    tbody tr.selected:hover { background: rgba(77, 124, 171, 0.12); }
+    /* 批量操作条：有选中项时出现 */
+    .batch-bar { display: none; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 12px; margin-bottom: 10px; border: 1px solid #dbe3ee; border-radius: 10px; background: #f4f7fb; font-size: 0.85rem; color: #34455c; }
+    .batch-bar.visible { display: flex; }
+    .batch-count { font-weight: 600; color: #2f4a67; }
+    .batch-pick-all { border: 0; background: none; padding: 0; color: #3e6b9b; font-family: inherit; font-size: 0.85rem; cursor: pointer; text-decoration: underline; }
+    .batch-pick-all:hover { background: none; filter: none; transform: none; color: #2f5580; }
+    .batch-btn { border: 1px solid #cfd9e6; background: #fff; color: #33465e; font-family: inherit; font-size: 0.82rem; font-weight: 500; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+    .batch-btn:hover { background: #f9fbfd; border-color: #b7c5d8; }
+    .batch-btn-danger { border-color: #e3c6c2; color: #a2402f; }
+    .batch-btn-danger:hover { background: #fdf5f4; border-color: #d9b3ad; }
+    .batch-clear { margin-left: auto; border: 0; background: none; color: #6b7c93; font-family: inherit; font-size: 0.82rem; padding: 6px 4px; cursor: pointer; }
+    .batch-clear:hover { background: none; filter: none; transform: none; color: #3e6b9b; }
     /* 单行显示，超出部分在格子里横向滑动，不换行、不撑高行 */
     td .cell { overflow-x: auto; overflow-y: hidden; white-space: nowrap; /* 常驻 3px 横向拖动条，只有内容溢出时才出现 */ /* 别加 scrollbar-width/color，会让下面 ::-webkit-scrollbar 全部失效 */ margin-bottom: -3px; }
     td .cell::-webkit-scrollbar { height: 3px; }
@@ -2214,10 +2363,12 @@ async exportConfig(request, env, ctx) {
           function updateCatelogDatalist() {
             if (addCatelogCascader) addCatelogCascader.refresh();
             if (editCatelogCascader) editCatelogCascader.refresh();
+            if (batchCatelogCascader) batchCatelogCascader.refresh();
           }
 
           function selectCategory(category) {
             selectedCategory = category;
+            selectedIds.clear();
             renderCategorySidebar();
             currentPage = 1;
             if (category === '') {
@@ -2301,9 +2452,9 @@ async exportConfig(request, env, ctx) {
           searchInput.style.marginBottom = '12px';
           const configMain = document.querySelector('.config-main');
           if (configMain) {
-            const tableWrapper = configMain.querySelector('.table-wrapper');
-            if (tableWrapper) {
-              configMain.insertBefore(searchInput, tableWrapper);
+            const anchor = configMain.querySelector('.batch-bar') || configMain.querySelector('.table-wrapper');
+            if (anchor) {
+              configMain.insertBefore(searchInput, anchor);
             } else {
               configMain.appendChild(searchInput);
             }
@@ -2315,6 +2466,18 @@ async exportConfig(request, env, ctx) {
           let totalItems = 0;
           let allConfigs = []; // 保存所有配置数据
           let currentSearchKeyword = ''; // 保存当前搜索关键词
+
+          // 批量操作：选中集合跨页保留，元素均为字符串形式的 id
+          const selectedIds = new Set();
+          const batchBar = document.getElementById('batchBar');
+          const batchCount = document.getElementById('batchCount');
+          const batchPickAll = document.getElementById('batchPickAll');
+          const selectAllPage = document.getElementById('selectAllPage');
+          const batchMoveModal = document.getElementById('batchMoveModal');
+          const batchMoveTitle = document.getElementById('batchMoveTitle');
+          const batchDeleteModal = document.getElementById('batchDeleteModal');
+          const batchDeleteTitle = document.getElementById('batchDeleteTitle');
+          let batchCatelogCascader = null;
           
           // 创建编辑模态框
           const editModal = document.createElement('div');
@@ -2420,7 +2583,8 @@ async exportConfig(request, env, ctx) {
           function renderConfig(configs) {
           configTableBody.innerHTML = '';
            if (configs.length === 0) {
-                configTableBody.innerHTML = '<tr><td colspan="7">没有配置数据</td></tr>';
+                configTableBody.innerHTML = '<tr><td colspan="8">没有配置数据</td></tr>';
+                updateBatchBar();
                 return
             }
           configs.forEach((config, index) => {
@@ -2452,6 +2616,7 @@ async exportConfig(request, env, ctx) {
               const catelogCell = escapeHTML(config.catelog || '');
               const sortValue = config.sort_order || 9999;
                row.innerHTML = \`
+                  <td class="col-select"><input type="checkbox" class="row-check" data-id="\${config.id}"></td>
                   <td><div class="cell">\${safeName}</div></td>
                   <td><div class="cell">\${urlCell}</div></td>
                   <td><div class="cell">\${logoCell}</div></td>
@@ -2464,8 +2629,14 @@ async exportConfig(request, env, ctx) {
                   </td>
                \`;
               configTableBody.appendChild(row);
+              if (selectedIds.has(String(config.id))) {
+                const cb = row.querySelector('.row-check');
+                if (cb) cb.checked = true;
+                row.classList.add('selected');
+              }
           });
             bindActionEvents();
+            updateBatchBar();
           }
           
           // 事件委托：仅在首次渲染时绑定一次，后续重渲染无需重复绑定
@@ -2478,7 +2649,168 @@ async exportConfig(request, env, ctx) {
               const delBtn = e.target.closest('.del-btn');
               if (delBtn) { handleDelete(delBtn.dataset.id); return; }
             });
+            configTableBody.addEventListener('change', function(e) {
+              const cb = e.target.closest('.row-check');
+              if (!cb) return;
+              const id = String(cb.dataset.id);
+              if (cb.checked) selectedIds.add(id); else selectedIds.delete(id);
+              const tr = cb.closest('tr');
+              if (tr) tr.classList.toggle('selected', cb.checked);
+              updateBatchBar();
+            });
          }
+
+          // 批量条：有选中项时出现，并同步表头复选框状态
+          function updateBatchBar() {
+            const count = selectedIds.size;
+            if (batchBar) batchBar.classList.toggle('visible', count > 0);
+            if (batchCount) batchCount.textContent = '已选 ' + count + ' 项';
+            const pageIds = (allConfigs || []).map(c => String(c.id));
+            const picked = pageIds.filter(id => selectedIds.has(id)).length;
+            if (selectAllPage) {
+              selectAllPage.checked = pageIds.length > 0 && picked === pageIds.length;
+              selectAllPage.indeterminate = picked > 0 && picked < pageIds.length;
+            }
+            if (batchPickAll) {
+              const showPickAll = totalItems > count;
+              batchPickAll.style.display = showPickAll ? '' : 'none';
+              batchPickAll.textContent = '选择全部 ' + totalItems + ' 项';
+            }
+            if (batchMoveTitle) batchMoveTitle.textContent = '迁移 ' + count + ' 个网站到';
+            if (batchDeleteTitle) batchDeleteTitle.textContent = '删除 ' + count + ' 个网站？';
+          }
+
+          if (selectAllPage) {
+            selectAllPage.addEventListener('change', function() {
+              const pageIds = (allConfigs || []).map(c => String(c.id));
+              if (selectAllPage.checked) pageIds.forEach(id => selectedIds.add(id));
+              else pageIds.forEach(id => selectedIds.delete(id));
+              renderConfig(allConfigs);
+            });
+          }
+
+          if (batchPickAll) {
+            batchPickAll.addEventListener('click', function() {
+              const qs = [];
+              if (selectedCategory) qs.push('catalog=' + encodeURIComponent(selectedCategory));
+              if (currentSearchKeyword) qs.push('keyword=' + encodeURIComponent(currentSearchKeyword));
+              fetch('/api/config/ids' + (qs.length ? '?' + qs.join('&') : ''))
+                .then(res => res.json())
+                .then(data => {
+                  if (data.code !== 200) { showMessage(data.message || '读取失败', 'error'); return; }
+                  const ids = data.data || [];
+                  if (ids.length > 1000) { showMessage('单次最多处理 1000 条，当前结果过多', 'error'); return; }
+                  ids.forEach(id => selectedIds.add(String(id)));
+                  renderConfig(allConfigs);
+                }).catch(() => showMessage('网络错误', 'error'));
+            });
+          }
+
+          const batchClearBtn = document.getElementById('batchClearBtn');
+          if (batchClearBtn) {
+            batchClearBtn.addEventListener('click', function() {
+              selectedIds.clear();
+              renderConfig(allConfigs);
+            });
+          }
+
+          const batchMoveBtn = document.getElementById('batchMoveBtn');
+          const batchMoveClose = document.getElementById('batchMoveClose');
+          const batchMoveCancel = document.getElementById('batchMoveCancel');
+          const batchMoveConfirm = document.getElementById('batchMoveConfirm');
+          if (batchMoveBtn) {
+            batchMoveBtn.addEventListener('click', function() {
+              if (selectedIds.size === 0) return;
+              updateBatchBar();
+              batchMoveModal.style.display = 'block';
+              if (batchCatelogCascader) batchCatelogCascader.setPath('');
+            });
+          }
+          [batchMoveClose, batchMoveCancel].forEach(function(btn) {
+            if (btn) btn.addEventListener('click', function () { batchMoveModal.style.display = 'none'; });
+          });
+          if (batchMoveConfirm) {
+            batchMoveConfirm.addEventListener('click', function() {
+              const target = batchCatelogCascader ? String(batchCatelogCascader.getEffectivePath() || '').trim() : '';
+              if (!target) { showMessage('请选择目标分类', 'error'); return; }
+              issueBatch('move', target);
+            });
+          }
+
+          const batchDeleteBtn = document.getElementById('batchDeleteBtn');
+          const batchDeleteCancel = document.getElementById('batchDeleteCancel');
+          const batchDeleteConfirm = document.getElementById('batchDeleteConfirm');
+          if (batchDeleteBtn) {
+            batchDeleteBtn.addEventListener('click', function() {
+              if (selectedIds.size === 0) return;
+              updateBatchBar();
+              batchDeleteModal.style.display = 'block';
+            });
+          }
+          if (batchDeleteCancel) {
+            batchDeleteCancel.addEventListener('click', function () { batchDeleteModal.style.display = 'none'; });
+          }
+          if (batchDeleteConfirm) {
+            batchDeleteConfirm.addEventListener('click', function () { issueBatch('delete'); });
+          }
+
+          const batchExportBtn = document.getElementById('batchExportBtn');
+          if (batchExportBtn) {
+            batchExportBtn.addEventListener('click', function() {
+              const ids = Array.from(selectedIds);
+              if (ids.length === 0) return;
+              fetch('/api/config/export?ids=' + encodeURIComponent(ids.join(',')))
+                .then(res => res.blob())
+                .then(blob => {
+                  const url = window.URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = 'config-selected.json';
+                  document.body.appendChild(a);
+                  a.click();
+                  window.URL.revokeObjectURL(url);
+                  document.body.removeChild(a);
+                }).catch(() => showMessage('网络错误', 'error'));
+            });
+          }
+
+          // 执行批量迁移或删除
+          function issueBatch(action, catelog) {
+            if (selectedIds.size === 0) return;
+            const ids = Array.from(selectedIds);
+            if (batchMoveConfirm) batchMoveConfirm.disabled = true;
+            if (batchDeleteConfirm) batchDeleteConfirm.disabled = true;
+            fetch('/api/config/batch', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: action, ids: ids, catelog: catelog || '' })
+            }).then(res => res.json())
+              .then(data => {
+                if (data.code !== 200) {
+                  showMessage(data.message || '操作失败', 'error');
+                  return;
+                }
+                const done = (data.data && typeof data.data.affected === 'number' && data.data.affected > 0)
+                  ? data.data.affected : ids.length;
+                showMessage(action === 'move' ? '已迁移 ' + done + ' 个网站' : '已删除 ' + done + ' 个网站', 'success');
+                selectedIds.clear();
+                batchMoveModal.style.display = 'none';
+                batchDeleteModal.style.display = 'none';
+                let targetPage = currentPage;
+                if (action === 'delete') {
+                  const remain = Math.max(totalItems - done, 0);
+                  targetPage = Math.min(currentPage, Math.max(1, Math.ceil(remain / pageSize)));
+                }
+                if (selectedCategory) fetchConfigsByCategory(selectedCategory, targetPage);
+                else fetchConfigs(targetPage, currentSearchKeyword);
+                loadCategorySidebar();
+                if (action === 'move') updateCatelogDatalist();
+              }).catch(() => showMessage('网络错误', 'error'))
+              .finally(function () {
+                if (batchMoveConfirm) batchMoveConfirm.disabled = false;
+                if (batchDeleteConfirm) batchDeleteConfirm.disabled = false;
+              });
+          }
 
     // 点击编辑：直接用当前页已加载的 allConfigs 取目标数据，无需再请求
           function handleEdit(id) {
@@ -2676,6 +3008,7 @@ async exportConfig(request, env, ctx) {
           searchInput.addEventListener('input', () => {
               currentSearchKeyword = searchInput.value.trim();
               currentPage = 1; // 搜索时重置为第一页
+              selectedIds.clear();
               fetchConfigs(currentPage,currentSearchKeyword);
           });
 
@@ -2689,6 +3022,11 @@ async exportConfig(request, env, ctx) {
           editCatelogCascader = createCascader(
             document.getElementById('editCatelogCascader'),
             document.getElementById('editCatelog'),
+            ''
+          );
+          batchCatelogCascader = createCascader(
+            document.getElementById('batchCatelogCascader'),
+            document.getElementById('batchCatelog'),
             ''
           );
 
