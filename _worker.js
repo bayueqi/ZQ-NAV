@@ -1470,10 +1470,6 @@ async exportConfig(request, env, ctx) {
                 <input type="password" id="setCurrentPass" autocomplete="current-password" placeholder="修改密码时填写">
                 <label for="setNewPass">新密码</label>
                 <input type="password" id="setNewPass" autocomplete="new-password" placeholder="不修改就留空">
-                <label class="setting-switch" for="setSubmission">
-                  <input type="checkbox" id="setSubmission">
-                  <span>允许访客投稿</span>
-                </label>
                 <button type="submit">保存</button>
               </form>
             </div>
@@ -1576,8 +1572,6 @@ async exportConfig(request, env, ctx) {
     .toolbar-btn-settings { background: #fff; border-color: #dbe4ef; color: #305580; }
     .toolbar-btn-settings:hover { background: #eef3f9; border-color: #c6d5e6; filter: none; }
     .modal-content h2 { margin: 0 0 16px; font-size: 1.15rem; color: #2d3748; font-weight: 600; }
-    .setting-switch { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; cursor: pointer; font-weight: 500; color: #4a5568; font-size: 0.9rem; }
-    .setting-switch input { width: 16px; height: 16px; margin: 0; accent-color: #416d9d; box-shadow: none; }
     @media (max-width: 480px) {
         .toolbar-btn span { display: none; }
         .toolbar-btn { padding: 10px 12px; border-radius: 10px; }
@@ -2100,7 +2094,7 @@ async exportConfig(request, env, ctx) {
                 if (data.code === 200) {
                   totalItems = data.total;
                   currentPage = data.page;
-                  totalPagesSpan.innerText = Math.ceil(totalItems / pageSize);
+                  totalPagesSpan.innerText = Math.max(1, Math.ceil(totalItems / pageSize));
                   currentPageSpan.innerText = currentPage;
                   allConfigs = data.data;
                   renderConfig(allConfigs);
@@ -2140,7 +2134,7 @@ async exportConfig(request, env, ctx) {
                 if (data.code === 200) {
                   totalItems = data.total;
                   currentPage = data.page;
-                  totalPagesSpan.innerText = Math.ceil(totalItems / pageSize);
+                  totalPagesSpan.innerText = Math.max(1, Math.ceil(totalItems / pageSize));
                   currentPageSpan.innerText = currentPage;
                   allConfigs = data.data;
                   renderConfig(allConfigs);
@@ -2267,7 +2261,7 @@ async exportConfig(request, env, ctx) {
                       if (data.code === 200) {
                           totalItems = data.total;
                           currentPage = data.page;
-                                                 totalPagesSpan.innerText = Math.ceil(totalItems / pageSize);
+                                                 totalPagesSpan.innerText = Math.max(1, Math.ceil(totalItems / pageSize));
                           currentPageSpan.innerText = currentPage;
                           allConfigs = data.data; // 保存所有数据
                           renderConfig(allConfigs);
@@ -2588,35 +2582,20 @@ async exportConfig(request, env, ctx) {
           const settingsForm = document.getElementById('settingsForm');
 
           function openSettings() {
-            fetch('/api/settings', { cache: 'no-store' })
-              .then(res => res.json())
-              .then(data => {
-                if (data.code !== 200) {
-                  showMessage(data.message || '读取设置失败', 'error');
-                  return;
-                }
-                var d = data.data || {};
-                document.getElementById('setTitle').value = d.site_title || '';
-                document.getElementById('setSubtitle').value = d.site_subtitle || '';
-                document.getElementById('setFavicon').value = d.favicon_api || '';
-                document.getElementById('setUser').value = d.admin_user || '';
-                document.getElementById('setCurrentPass').value = '';
-                document.getElementById('setNewPass').value = '';
-                document.getElementById('setSubmission').checked = String(d.submission) === 'true';
-                settingsModal.style.display = 'block';
-              })
-              .catch(function () { showMessage('网络错误', 'error'); });
+            var d = window.__SITE_SETTINGS__ || {};
+            document.getElementById('setTitle').value = d.site_title || '';
+            document.getElementById('setSubtitle').value = d.site_subtitle || '';
+            document.getElementById('setFavicon').value = d.favicon_api || '';
+            document.getElementById('setUser').value = d.admin_user || '';
+            document.getElementById('setCurrentPass').value = '';
+            document.getElementById('setNewPass').value = '';
+            settingsModal.style.display = 'block';
           }
 
           if (settingsBtn) settingsBtn.addEventListener('click', openSettings);
           if (settingsModalClose) {
             settingsModalClose.addEventListener('click', function () {
               settingsModal.style.display = 'none';
-            });
-          }
-          if (settingsModal) {
-            settingsModal.addEventListener('click', function (e) {
-              if (e.target === settingsModal) settingsModal.style.display = 'none';
             });
           }
           if (settingsForm) {
@@ -2626,8 +2605,7 @@ async exportConfig(request, env, ctx) {
                 site_title: document.getElementById('setTitle').value,
                 site_subtitle: document.getElementById('setSubtitle').value,
                 favicon_api: document.getElementById('setFavicon').value,
-                admin_user: document.getElementById('setUser').value,
-                submission: document.getElementById('setSubmission').checked
+                admin_user: document.getElementById('setUser').value
               };
               var newPass = document.getElementById('setNewPass').value.trim();
               if (newPass) {
@@ -2659,9 +2637,16 @@ async exportConfig(request, env, ctx) {
     let html = await this.getFileContent('admin.html');
     const faviconApi = await getIconApiUrl(env);
     const settings = await readSettings(env);
+    const bootSettings = JSON.stringify({
+      site_title: settings.site_title || '',
+      site_subtitle: settings.site_subtitle || '',
+      favicon_api: settings.favicon_api || '',
+      admin_user: settings.admin_user || ''
+    }).replace(/</g, '\\u003c');
     html = html
       .replace('const faviconApi = \'https://toolb.cn/favicon/{domain}\';', `const faviconApi = ${JSON.stringify(faviconApi)};`)
-      .replace('<title>书签管理</title>', `<title>${escapeHTML(settings.site_title || '琪舟阁')} · 书签管理</title>`);
+      .replace('<title>书签管理</title>', `<title>${escapeHTML(settings.site_title || '琪舟阁')} · 书签管理</title>`)
+      .replace("const settingsBtn = document.getElementById('settingsBtn');", () => `window.__SITE_SETTINGS__ = ${bootSettings};\n          const settingsBtn = document.getElementById('settingsBtn');`);
     return new Response(html, {
         headers: {'Content-Type': 'text/html; charset=utf-8'}
     });
