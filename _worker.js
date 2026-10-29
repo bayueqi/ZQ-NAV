@@ -49,6 +49,15 @@ async function getIconApiUrl(env, settings) {
  * 渲染单个网站卡片（优化版）
  */
 
+// 给指定 id 的 input 写入 value，用于后台表单回填
+function fillInputValue(html, id, value) {
+  const pattern = new RegExp('(<input[^>]*\\bid="' + id + '"[^>]*?)(\\s*/?>)');
+  return html.replace(pattern, (match, head, tail) => {
+    const cleaned = head.replace(/\s+value="[^"]*"/, '');
+    return cleaned + ' value="' + escapeHTML(value) + '"' + tail;
+  });
+}
+
 // 静态资源 ETag：内容不变时返回 304，省掉重复传输
 function contentHash(text) {
   let h = 5381;
@@ -1514,9 +1523,9 @@ async exportConfig(request, env, ctx) {
                 <input type="text" id="setSubtitle" placeholder="显示在首页顶部">
                 <label for="setFavicon">图标 API</label>
                 <input type="text" id="setFavicon" placeholder="默认 https://toolb.cn/favicon/{domain}">
-                <label for="setUser">管理员账号</label>
+                <label for="setUser">用户名</label>
                 <input type="text" id="setUser" autocomplete="username" placeholder="默认 admin">
-                <label for="setNewPass">新密码</label>
+                <label for="setNewPass">密码</label>
                 <input type="password" id="setNewPass" autocomplete="new-password" placeholder="不修改就留空">
                 <p class="settings-error" id="settingsError" style="display:none;"></p>
                 <button type="submit">保存</button>
@@ -2787,10 +2796,11 @@ async exportConfig(request, env, ctx) {
     let html = await this.getFileContent('admin.html');
     html = html
       .replace('const faviconApi = \'https://toolb.cn/favicon/{domain}\';', `const faviconApi = ${JSON.stringify(faviconApi)};`)
-      .replace('<title>书签管理</title>', `<title>${escapeHTML(settings.site_title || '琪舟阁')} · 书签管理</title>`)
-      .replace('<input type="text" id="setTitle" placeholder="站点名称">', () => `<input type="text" id="setTitle" placeholder="站点名称" value="${escapeHTML(settings.site_title || '')}">`)
-      .replace('<input type="text" id="setSubtitle" placeholder="显示在首页顶部">', () => `<input type="text" id="setSubtitle" placeholder="显示在首页顶部" value="${escapeHTML(settings.site_subtitle || '')}">`)
-      .replace('<input type="text" id="setFavicon" placeholder="https://toolb.cn/favicon/{domain}">', () => `<input type="text" id="setFavicon" placeholder="https://toolb.cn/favicon/{domain}" value="${escapeHTML(settings.favicon_api || '')}">`);
+      .replace('<title>书签管理</title>', `<title>${escapeHTML(settings.site_title || '琪舟阁')} · 书签管理</title>`);
+    // 设置面板回填当前配置：按 id 定位输入框，不依赖占位文字
+    html = fillInputValue(html, 'setTitle', settings.site_title || '');
+    html = fillInputValue(html, 'setSubtitle', settings.site_subtitle || '');
+    html = fillInputValue(html, 'setFavicon', settings.favicon_api || '');
     return new Response(html, {
         headers: {'Content-Type': 'text/html; charset=utf-8'}
     });
