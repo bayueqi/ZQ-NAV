@@ -1,16 +1,51 @@
 /**
- * 获取图标 API URL
-*/
-function getIconApiUrl(env) {
+ * 布局与站点配置默认值。后台改过的值写进 D1 的 settings 表，这里只作首次启动的兜底
+ */
+const SETTINGS_DEFAULTS = {
+  admin_user: 'admin',
+  admin_pass: 'admin',
+  favicon_api: '',
+  submission: '',
+  site_title: '琪舟阁',
+  site_subtitle: '- 指路人，亦是摘星人。',
+};
+
+async function readSettings(env) {
+  const out = Object.assign({}, SETTINGS_DEFAULTS);
+  let hasPass = false;
   try {
-    const iconApiUrl = env.FaviconApi;
-    if (iconApiUrl) {
-      return iconApiUrl;
+    const { results } = await env.NAV_DB.prepare('SELECT key, value FROM settings').all();
+    for (const row of results || []) {
+      if (!row || !row.key) continue;
+      out[row.key] = row.value === null || row.value === undefined ? '' : String(row.value);
+      if (row.key === 'admin_pass') hasPass = true;
     }
   } catch (error) {
-    console.error('Get icon API URL error:', error);
+    // 表还没建或没绑 D1，用默认值
   }
-  return 'https://toolb.cn/favicon/{domain}';
+  // 老部署已经配了环境变量：没在后台设过密码时按环境变量初始化，避免默认 admin/admin 成为后门
+  if (!hasPass && env.ADMIN_PASSWORD) {
+    out.admin_pass = String(env.ADMIN_PASSWORD);
+    if (env.ADMIN_USERNAME) out.admin_user = String(env.ADMIN_USERNAME);
+  }
+  return out;
+}
+
+async function writeSettings(env, patch) {
+  const keys = Object.keys(patch || {});
+  if (!keys.length) return;
+  const stmts = keys.map((key) => env.NAV_DB.prepare(
+    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).bind(key, patch[key] === null || patch[key] === undefined ? '' : String(patch[key])));
+  await env.NAV_DB.batch(stmts);
+}
+
+/**
+ * 获取图标 API URL
+*/
+async function getIconApiUrl(env) {
+  const settings = await readSettings(env);
+  return settings.favicon_api || env.FaviconApi || 'https://toolb.cn/favicon/{domain}';
 }
 
 /**
@@ -93,6 +128,34 @@ async function ensureCategoriesTable(env) {
         token TEXT PRIMARY KEY,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         expires_at DATETIME NOT NULL
+      )
+    `).run();
+    // 书签表：旧版本要手动执行 SQL，现在首次访问自动建
+    await env.NAV_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS sites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        logo TEXT,
+        "desc" TEXT,
+        catelog TEXT NOT NULL,
+        status TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 9999,
+        create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+        update_time DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+    await env.NAV_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS category_orders (
+        catelog TEXT PRIMARY KEY,
+        sort_order INTEGER NOT NULL DEFAULT 0
+      )
+    `).run();
+    // 站点配置：账号密码、图标 API、公开投稿开关都在这里，后台可改
+    await env.NAV_DB.prepare(`
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
       )
     `).run();
   } catch (e) {
@@ -292,13 +355,13 @@ async function migrateDirectBookmarksToDefault(env, parentPath, parentId, creati
   await env.NAV_DB.prepare('UPDATE sites SET catelog = ? WHERE catelog = ?').bind(defaultPath, parentPath).run();
 }
 
-function isSubmissionEnabled(env) {
-  const flag = env.ENABLE_PUBLIC_SUBMISSION;
-  if (flag === undefined || flag === null) {
+async function isSubmissionEnabled(env) {
+  const settings = await readSettings(env);
+  const value = settings.submission || env.ENABLE_PUBLIC_SUBMISSION;
+  if (value === undefined || value === null || value === '') {
     return true;
   }
-  const normalized = String(flag).trim().toLowerCase();
-  return normalized === 'true';
+  return String(value).trim().toLowerCase() === 'true';
 }
 
 const SESSION_COOKIE_NAME = 'nav_admin_session';
@@ -394,6 +457,12 @@ async function isAdminAuthenticated(request, env) {
         const method = request.method;
         const id = url.pathname.split('/').pop(); // 获取最后一个路径段，作为 id (例如 /api/config/1)
         try {
+            if (path === '/settings') {
+                if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
+                if (method === 'GET') return await this.getSettings(request, env, ctx);
+                if (method === 'POST') return await this.updateSettings(request, env, ctx);
+                return this.errorResponse('Method Not Allowed', 405);
+            }
             if (path === '/config') {
                 switch (method) {
                     case 'GET':
@@ -406,7 +475,7 @@ async function isAdminAuthenticated(request, env) {
                 }
             }
             if (path === '/config/submit' && method === 'POST') {
-              if (!isSubmissionEnabled(env)) {
+              if (!(await isSubmissionEnabled(env))) {
                 return this.errorResponse('Public submission disabled', 403);
               }
               return await this.submitConfig(request, env, ctx);
@@ -621,7 +690,7 @@ async function isAdminAuthenticated(request, env) {
         },
        async submitConfig(request, env, ctx) {
           try{
-              if (!isSubmissionEnabled(env)) {
+              if (!(await isSubmissionEnabled(env))) {
                   return this.errorResponse('Public submission disabled', 403);
               }
               const config = await request.json();
@@ -1191,6 +1260,47 @@ async exportConfig(request, env, ctx) {
               return this.errorResponse(`Failed to logout: ${e.message}`, 500);
           }
       },
+      // 站点设置：账号密码、图标 API、公开投稿开关。只给已登录的管理员读写
+      async getSettings(request, env, ctx) {
+          try {
+              const s = await readSettings(env);
+              const faviconApi = await getIconApiUrl(env);
+              const submission = await isSubmissionEnabled(env);
+              return json({ code: 200, data: {
+                  admin_user: s.admin_user, favicon_api: faviconApi, submission: submission ? 'true' : 'false',
+                  site_title: s.site_title, site_subtitle: s.site_subtitle
+              } });
+          } catch (e) {
+              return this.errorResponse(`Failed to read settings: ${e.message}`, 500);
+          }
+      },
+      async updateSettings(request, env, ctx) {
+          try {
+              const body = await request.json().catch(() => ({}));
+              const patch = {};
+              const user = String(body.admin_user || '').trim();
+              if (user) patch.admin_user = user;
+              // 改密码要先过当前密码，避免会话被别人接手后直接换掉
+              const nextPass = String(body.admin_pass || '').trim();
+              if (nextPass) {
+                  const s = await readSettings(env);
+                  if (String(body.current_pass || '') !== (s.admin_pass || SETTINGS_DEFAULTS.admin_pass)) {
+                      return this.errorResponse('当前密码不正确', 400);
+                  }
+                  if (nextPass.length < 4) return this.errorResponse('新密码至少 4 位', 400);
+                  patch.admin_pass = nextPass;
+              }
+              if (body.favicon_api !== undefined) patch.favicon_api = String(body.favicon_api || '').trim() || SETTINGS_DEFAULTS.favicon_api;
+              if (body.submission !== undefined) patch.submission = body.submission ? 'true' : 'false';
+              if (body.site_title !== undefined) patch.site_title = String(body.site_title || '').trim() || SETTINGS_DEFAULTS.site_title;
+              if (body.site_subtitle !== undefined) patch.site_subtitle = String(body.site_subtitle || '').trim();
+              if (!Object.keys(patch).length) return this.errorResponse('没有需要保存的修改', 400);
+              await writeSettings(env, patch);
+              return json({ code: 200, message: 'Settings saved' });
+          } catch (e) {
+              return this.errorResponse(`Failed to save settings: ${e.message}`, 500);
+          }
+      },
        errorResponse(message, status) {
           return json({code: status, message: message}, status);
       }
@@ -1212,14 +1322,18 @@ async exportConfig(request, env, ctx) {
         const name = (formData.get('name') || '').trim();
         const password = (formData.get('password') || '').trim();
 
-        const storedUsername = env.ADMIN_USERNAME;
-        const storedPassword = env.ADMIN_PASSWORD;
+        // 账号密码存在 D1 的 settings 表，首次启动是 admin / admin，登录后可在后台改
+        const stored = await readSettings(env);
+        const storedUsername = stored.admin_user || 'admin';
+        const storedPassword = stored.admin_pass || 'admin';
+        // 环境变量留作救援通道：设了 ADMIN_USERNAME / ADMIN_PASSWORD 就额外接受这一组
+        const rescueUsername = env.ADMIN_USERNAME;
+        const rescuePassword = env.ADMIN_PASSWORD;
 
         const isValid =
-          storedUsername &&
-          storedPassword &&
-          name === storedUsername &&
-          password === storedPassword;
+          (name === storedUsername && password === storedPassword) ||
+          Boolean(rescueUsername && rescuePassword &&
+            name === rescueUsername && password === rescuePassword);
 
         if (isValid) {
           const token = await createAdminSession(env);
@@ -1305,6 +1419,10 @@ async exportConfig(request, env, ctx) {
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
                 <span>导出</span>
               </button>
+              <button id="settingsBtn" class="toolbar-btn toolbar-btn-settings" title="站点设置">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                <span>设置</span>
+              </button>
               <button id="logoutBtn" class="toolbar-btn toolbar-btn-logout" title="退出登录">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
                 <span>退出</span>
@@ -1332,6 +1450,31 @@ async exportConfig(request, env, ctx) {
                 <label for="addSortOrder">排序:</label>
                 <input type="number" id="addSortOrder" placeholder="数字小靠前 (可选)">
                 <button type="submit">添加</button>
+              </form>
+            </div>
+          </div>
+          <div class="modal" id="settingsModal" style="display:none;">
+            <div class="modal-content">
+              <span class="modal-close" id="settingsModalClose">×</span>
+              <h2>站点设置</h2>
+              <form id="settingsForm">
+                <label for="setTitle">站点名称</label>
+                <input type="text" id="setTitle" placeholder="站点名称">
+                <label for="setSubtitle">副标题</label>
+                <input type="text" id="setSubtitle" placeholder="显示在首页顶部">
+                <label for="setFavicon">图标 API</label>
+                <input type="text" id="setFavicon" placeholder="https://toolb.cn/favicon/{domain}">
+                <label for="setUser">管理员账号</label>
+                <input type="text" id="setUser" autocomplete="username">
+                <label for="setCurrentPass">当前密码</label>
+                <input type="password" id="setCurrentPass" autocomplete="current-password" placeholder="修改密码时填写">
+                <label for="setNewPass">新密码</label>
+                <input type="password" id="setNewPass" autocomplete="new-password" placeholder="不修改就留空">
+                <label class="setting-switch" for="setSubmission">
+                  <input type="checkbox" id="setSubmission">
+                  <span>允许访客投稿</span>
+                </label>
+                <button type="submit">保存</button>
               </form>
             </div>
           </div>
@@ -1430,6 +1573,11 @@ async exportConfig(request, env, ctx) {
     .toolbar-btn-export:hover { background: #eef3f9; border-color: #c6d5e6; filter: none; }
     .toolbar-btn-logout { background: #fff; border-color: #ecdbd8; color: #b0473f; }
     .toolbar-btn-logout:hover { background: #fdf4f3; border-color: #e3c4c0; filter: none; }
+    .toolbar-btn-settings { background: #fff; border-color: #dbe4ef; color: #305580; }
+    .toolbar-btn-settings:hover { background: #eef3f9; border-color: #c6d5e6; filter: none; }
+    .modal-content h2 { margin: 0 0 16px; font-size: 1.15rem; color: #2d3748; font-weight: 600; }
+    .setting-switch { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; cursor: pointer; font-weight: 500; color: #4a5568; font-size: 0.9rem; }
+    .setting-switch input { width: 16px; height: 16px; margin: 0; accent-color: #416d9d; box-shadow: none; }
     @media (max-width: 480px) {
         .toolbar-btn span { display: none; }
         .toolbar-btn { padding: 10px 12px; border-radius: 10px; }
@@ -2432,6 +2580,76 @@ async exportConfig(request, env, ctx) {
                 });
             });
           }
+
+          // 站点设置：账号密码、图标 API、投稿开关、站点名称
+          const settingsBtn = document.getElementById('settingsBtn');
+          const settingsModal = document.getElementById('settingsModal');
+          const settingsModalClose = document.getElementById('settingsModalClose');
+          const settingsForm = document.getElementById('settingsForm');
+
+          function openSettings() {
+            fetch('/api/settings', { cache: 'no-store' })
+              .then(res => res.json())
+              .then(data => {
+                if (data.code !== 200) {
+                  showMessage(data.message || '读取设置失败', 'error');
+                  return;
+                }
+                var d = data.data || {};
+                document.getElementById('setTitle').value = d.site_title || '';
+                document.getElementById('setSubtitle').value = d.site_subtitle || '';
+                document.getElementById('setFavicon').value = d.favicon_api || '';
+                document.getElementById('setUser').value = d.admin_user || '';
+                document.getElementById('setCurrentPass').value = '';
+                document.getElementById('setNewPass').value = '';
+                document.getElementById('setSubmission').checked = String(d.submission) === 'true';
+                settingsModal.style.display = 'block';
+              })
+              .catch(function () { showMessage('网络错误', 'error'); });
+          }
+
+          if (settingsBtn) settingsBtn.addEventListener('click', openSettings);
+          if (settingsModalClose) {
+            settingsModalClose.addEventListener('click', function () {
+              settingsModal.style.display = 'none';
+            });
+          }
+          if (settingsModal) {
+            settingsModal.addEventListener('click', function (e) {
+              if (e.target === settingsModal) settingsModal.style.display = 'none';
+            });
+          }
+          if (settingsForm) {
+            settingsForm.addEventListener('submit', function (e) {
+              e.preventDefault();
+              var payload = {
+                site_title: document.getElementById('setTitle').value,
+                site_subtitle: document.getElementById('setSubtitle').value,
+                favicon_api: document.getElementById('setFavicon').value,
+                admin_user: document.getElementById('setUser').value,
+                submission: document.getElementById('setSubmission').checked
+              };
+              var newPass = document.getElementById('setNewPass').value.trim();
+              if (newPass) {
+                payload.admin_pass = newPass;
+                payload.current_pass = document.getElementById('setCurrentPass').value;
+              }
+              fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+              }).then(res => res.json())
+                .then(data => {
+                  if (data.code === 200) {
+                    showMessage('设置已保存', 'success');
+                    settingsModal.style.display = 'none';
+                    setTimeout(function () { window.location.reload(); }, 700);
+                  } else {
+                    showMessage(data.message || '保存失败', 'error');
+                  }
+                }).catch(function () { showMessage('网络错误', 'error'); });
+            });
+          }
           `
     }
     return fileContents[filePath]
@@ -2439,8 +2657,11 @@ async exportConfig(request, env, ctx) {
   
     async renderAdminPage(env) {
     let html = await this.getFileContent('admin.html');
-    const faviconApi = getIconApiUrl(env);
-    html = html.replace('const faviconApi = \'https://toolb.cn/favicon/{domain}\';', `const faviconApi = '${faviconApi}';`);
+    const faviconApi = await getIconApiUrl(env);
+    const settings = await readSettings(env);
+    html = html
+      .replace('const faviconApi = \'https://toolb.cn/favicon/{domain}\';', `const faviconApi = ${JSON.stringify(faviconApi)};`)
+      .replace('<title>书签管理</title>', `<title>${escapeHTML(settings.site_title || '琪舟阁')} · 书签管理</title>`);
     return new Response(html, {
         headers: {'Content-Type': 'text/html; charset=utf-8'}
     });
@@ -2531,7 +2752,18 @@ async exportConfig(request, env, ctx) {
     }
 
     if (!sites || sites.length === 0) {
-      return new Response('No site configuration found.', { status: 404 });
+      const bootSettings = await readSettings(env);
+      const emptyHtml = `<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${escapeHTML(bootSettings.site_title)}</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #fdf8f3; font-family: 'Noto Sans SC', -apple-system, sans-serif; color: #2d3748; }
+  .box { text-align: center; padding: 40px 36px; background: #fff; border: 1px solid #e2e8f0; border-radius: 20px; box-shadow: 0 12px 36px rgba(37, 66, 103, 0.08); }
+  h1 { margin: 0 0 24px; font-size: 1.4rem; font-weight: 600; }
+  a { display: inline-block; padding: 11px 26px; border-radius: 12px; background: linear-gradient(135deg, #416d9d, #305580); color: #fff; text-decoration: none; font-weight: 600; }
+</style></head>
+<body><div class="box"><h1>${escapeHTML(bootSettings.site_title)}</h1><a href="/admin">进入后台</a></div></body></html>`;
+      return new Response(emptyHtml, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
     }
 
     const totalSites = sites.length;
@@ -2651,8 +2883,9 @@ async exportConfig(request, env, ctx) {
     const headingText = escapeHTML(headingPlainText);
     const headingDefaultAttr = escapeHTML(headingPlainText);
     const headingActiveAttr = catalogExists ? escapeHTML(currentCatalog) : '';
-    const submissionEnabled = isSubmissionEnabled(env);
-    const faviconApi = getIconApiUrl(env);
+    const submissionEnabled = await isSubmissionEnabled(env);
+    const faviconApi = await getIconApiUrl(env);
+    const siteSettings = await readSettings(env);
 
     // 优化后的 HTML
     const html = `
@@ -2661,7 +2894,7 @@ async exportConfig(request, env, ctx) {
     <head>
       <meta charset="UTF-8"/>
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>琪舟阁</title>
+      <title>${escapeHTML(siteSettings.site_title)}</title>
       <link rel="icon" href="https://img.520jk.cc.cd/i/2026/10/10/406956.png" type="image/png"/>
       <script src="https://cdn.tailwindcss.com"></script>
       <script>
@@ -2728,17 +2961,17 @@ async exportConfig(request, env, ctx) {
         ::-webkit-scrollbar-thumb:hover { background: rgba(65, 109, 157, 0.5); }
         
         /* 毛玻璃侧边栏 */
-        .sidebar { background: rgba(255, 255, 255, 0.72) !important; backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%); border-right: 1px solid rgba(255, 255, 255, 0.5) !important; box-shadow: 4px 0 24px rgba(37, 66, 103, 0.06); }
+        .sidebar { background: rgba(255, 255, 255, 0.82) !important; backdrop-filter: blur(14px) saturate(160%); -webkit-backdrop-filter: blur(14px) saturate(160%); border-right: 1px solid rgba(226, 232, 240, 0.8) !important; box-shadow: 4px 0 24px rgba(37, 66, 103, 0.05); }
         
         /* 毛玻璃浮动按钮 */
         .glass-btn { background: rgba(255, 255, 255, 0.75); backdrop-filter: blur(12px) saturate(180%); -webkit-backdrop-filter: blur(12px) saturate(180%); border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 4px 16px rgba(37, 66, 103, 0.08); transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
         .glass-btn:hover { background: rgba(255, 255, 255, 0.9); box-shadow: 0 6px 20px rgba(37, 66, 103, 0.12); transform: translateY(-1px); }
         
-        /* 卡片悬停效果 - 增强版 */
-        .site-card { background: rgba(255, 255, 255, 0.75) !important; backdrop-filter: blur(12px) saturate(180%); -webkit-backdrop-filter: blur(12px) saturate(180%); border: 1px solid rgba(255, 255, 255, 0.6) !important; transition: opacity 0.5s ease, transform 0.45s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.4s cubic-bezier(0.25, 0.8, 0.25, 1), border-color 0.4s ease, background 0.4s ease; opacity: 0; transform: translateY(24px); will-change: transform, opacity; }
+        /* 卡片：背景做实，不再逐张实时模糊，滚动更顺 */
+        .site-card { background: rgba(255, 255, 255, 0.92) !important; border: 1px solid rgba(226, 232, 240, 0.9) !important; transition: opacity 0.45s ease, transform 0.35s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.35s ease, border-color 0.35s ease; opacity: 0; transform: translateY(18px); will-change: transform, opacity; }
         /* 进入视口后弹出 */
         .site-card.is-visible { opacity: 1; transform: translateY(0); }
-        .site-card.is-visible:hover { transform: translateY(-6px) scale(1.02); box-shadow: 0 18px 40px rgba(37, 66, 103, 0.16), 0 4px 12px rgba(37, 66, 103, 0.08), 0 0 0 1px rgba(108, 143, 186, 0.08); border-color: rgba(195, 208, 227, 0.65) !important; background: rgba(255, 255, 255, 0.9) !important; }
+        .site-card.is-visible:hover { transform: translateY(-4px); box-shadow: 0 12px 28px rgba(37, 66, 103, 0.12), 0 2px 6px rgba(37, 66, 103, 0.06); border-color: rgba(195, 208, 227, 0.9) !important; }
         /* Logo 动感 */
         .site-card .logo-container,
         .site-card > div > div:first-child > div { transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
@@ -2758,10 +2991,11 @@ async exportConfig(request, env, ctx) {
         .glass-search { background: rgba(255, 255, 255, 0.6) !important; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid rgba(225, 231, 241, 0.8) !important; transition: all 0.3s ease; }
         .glass-search:focus { background: rgba(255, 255, 255, 0.9) !important; border-color: rgba(108, 143, 186, 0.5) !important; box-shadow: 0 0 0 3px rgba(108, 143, 186, 0.1); }
         
-        /* 分类链接平滑过渡 */
-        .category-link { transition: all 0.2s ease; position: relative; }
-        .category-link:hover { padding-left: 16px !important; }
+        /* 分类链接：不靠位移，靠底色和左侧标记 */
+        .category-link { transition: background 0.2s ease, color 0.2s ease; position: relative; }
+        .category-link:hover { background: rgba(65, 109, 157, 0.06); }
         .category-link.active { background: linear-gradient(135deg, rgba(65, 109, 157, 0.1), rgba(65, 109, 157, 0.05)) !important; }
+        .category-link.active::before { content: ''; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 2px; background: #305580; }
         
         /* 页脚毛玻璃 */
         .glass-footer { background: rgba(255, 255, 255, 0.5) !important; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-top: 1px solid rgba(255, 255, 255, 0.5) !important; }
@@ -2786,25 +3020,14 @@ async exportConfig(request, env, ctx) {
         /* 毛玻璃统计卡片 */
         .glass-stats { background: rgba(255, 255, 255, 0.12) !important; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.15) !important; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1); }
         
-        /* 分类展开按钮平滑 */
-        .cat-expand-btn { transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s ease, background 0.2s ease; }
-        
         /* 复制成功提示 */
-        .copy-tip { animation: copyTipFade 1.8s ease forwards; }
-        @keyframes copyTipFade {
-          0% { opacity: 0; transform: translateY(8px); }
-          15% { opacity: 1; transform: translateY(0); }
-          75% { opacity: 1; transform: translateY(0); }
-          100% { opacity: 0; transform: translateY(-6px); }
-        }
-        
-        /* 复制成功提示动画 */
         @keyframes fadeInOut {
           0% { opacity: 0; transform: translateY(10px); }
           20% { opacity: 1; transform: translateY(0); }
           80% { opacity: 1; transform: translateY(0); }
           100% { opacity: 0; transform: translateY(-10px); }
         }
+        .copy-tip { animation: fadeInOut 1.8s ease forwards; }
         .copy-success-animation { animation: fadeInOut 2s ease forwards; }
         
         /* 分类展开/折叠 */
@@ -2880,7 +3103,7 @@ async exportConfig(request, env, ctx) {
       <aside id="sidebar" class="sidebar fixed left-0 top-0 h-full w-64 z-50 overflow-y-auto mobile-sidebar lg:transform-none transition-all duration-300">
         <div class="p-6">
           <div class="flex items-center justify-between mb-8">
-            <h2 class="text-2xl font-bold text-primary-600 tracking-tight">琪舟阁</h2>
+            <h2 class="text-2xl font-bold text-primary-600 tracking-tight">${escapeHTML(siteSettings.site_title)}</h2>
             <button id="closeSidebar" class="p-1 rounded-full hover:bg-gray-100 lg:hidden">
               <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -2949,16 +3172,25 @@ async exportConfig(request, env, ctx) {
               <span class="inline-flex items-center gap-2 rounded-full bg-white/10 backdrop-blur-sm px-3 py-1 text-[11px] uppercase tracking-[0.28em] text-secondary-200/90 border border-white/10">
                 生如夏花之绚烂，死如秋叶之静美。
               </span>
-              <h1 class="mt-4 text-3xl md:text-4xl font-semibold tracking-tight drop-shadow-sm">琪舟阁</h1>
+              <h1 class="mt-4 text-3xl md:text-4xl font-semibold tracking-tight drop-shadow-sm">${escapeHTML(siteSettings.site_title)}</h1>
               <p class="mt-3 text-sm md:text-base text-secondary-100/90 leading-relaxed">
-                - 指路人，亦是摘星人。
+                ${escapeHTML(siteSettings.site_subtitle)}
               </p>
             </div>
             <div class="w-full md:w-auto flex justify-center md:justify-end">
-              <div class="glass-stats rounded-2xl px-6 py-5 text-left md:text-right">
-                <p class="text-xs uppercase tracking-[0.28em] text-secondary-100/70">Current Overview</p>
-                <p class="mt-3 text-2xl font-semibold">${totalSites}</p>
-                <p class="text-sm text-secondary-100/85">条书签 · ${catalogs.length} 个分类</p>
+              <div class="glass-stats rounded-2xl px-6 py-4">
+                <p class="text-[11px] uppercase tracking-[0.18em] text-secondary-100/60">Overview</p>
+                <div class="mt-3 flex items-center gap-4">
+                  <div class="flex items-baseline gap-1.5">
+                    <span class="text-2xl font-semibold leading-none tabular-nums">${totalSites}</span>
+                    <span class="text-xs text-secondary-100/70">书签</span>
+                  </div>
+                  <span class="h-6 w-px bg-white/20"></span>
+                  <div class="flex items-baseline gap-1.5">
+                    <span class="text-2xl font-semibold leading-none tabular-nums">${catalogs.length}</span>
+                    <span class="text-xs text-secondary-100/70">分类</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -3015,7 +3247,7 @@ async exportConfig(request, env, ctx) {
                 try {
                   const url = new URL(normalizedUrl);
                   const domain = url.hostname;
-                  finalIconUrl = escapeHTML(getIconApiUrl(env).replace('{domain}', domain));
+                  finalIconUrl = escapeHTML(faviconApi.replace('{domain}', domain));
                 } catch (error) {
                   // URL解析失败，继续使用首字母
                 }
@@ -3079,7 +3311,7 @@ async exportConfig(request, env, ctx) {
         <!-- 页脚 -->
         <footer class="glass-footer py-8 px-6 mt-12">
           <div class="max-w-5xl mx-auto text-center">
-            <p class="text-gray-500">© ${new Date().getFullYear()} 琪舟阁 | 愿你在此找到方向</p>
+            <p class="text-gray-500">© ${new Date().getFullYear()} ${escapeHTML(siteSettings.site_title)} | 愿你在此找到方向</p>
           </div>
         </footer>
       </main>
