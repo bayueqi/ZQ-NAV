@@ -3145,18 +3145,15 @@ async exportConfig(request, env, ctx) {
         <header class="hero-header text-white py-10 px-6 md:px-10 shadow-sm relative z-10">
           <div class="max-w-5xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-6 relative z-10">
             <div class="flex-1 text-center md:text-left">
-              <span class="inline-flex items-center gap-2 rounded-full bg-white/10 backdrop-blur-sm px-3 py-1 text-[11px] uppercase tracking-[0.28em] text-secondary-200/90 border border-white/10">
-                生如夏花之绚烂，死如秋叶之静美。
-              </span>
-              <h1 class="mt-4 text-3xl md:text-4xl font-semibold tracking-tight drop-shadow-sm">${escapeHTML(siteSettings.site_title)}</h1>
+              <h1 class="text-3xl md:text-4xl font-semibold tracking-tight drop-shadow-sm">${escapeHTML(siteSettings.site_title)}</h1>
               <p class="mt-3 text-sm md:text-base text-secondary-100/90 leading-relaxed">
                 ${escapeHTML(siteSettings.site_subtitle)}
               </p>
             </div>
             <div class="w-full md:w-auto flex justify-center md:justify-end">
-              <div class="glass-stats rounded-2xl px-6 py-4">
+              <div class="glass-stats rounded-2xl px-6 py-4 text-center">
                 <p class="text-[11px] uppercase tracking-[0.18em] text-secondary-100/60">Overview</p>
-                <div class="mt-3 flex items-center gap-4">
+                <div class="mt-3 flex items-center justify-center gap-4">
                   <div class="flex items-baseline gap-1.5">
                     <span class="text-2xl font-semibold leading-none tabular-nums">${totalSites}</span>
                     <span class="text-xs text-secondary-100/70">书签</span>
