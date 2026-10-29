@@ -1604,13 +1604,25 @@ async exportConfig(request, env, ctx) {
     /* 级联分类选择器 */
     .cascader-host { width: 100%; }
     .cascader-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; background: rgba(255,255,255,0.7); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid #e2e8f0; border-radius: 10px; min-height: 42px; transition: all 0.2s ease; }
-    .cascader-wrap:focus-within { border-color: #416d9d; box-shadow: 0 0 0 3px rgba(65,109,157,0.12); background: rgba(255,255,255,0.9); }
-    .cascader-wrap select,
-    .cascader-wrap input { padding: 7px 10px !important; margin: 0 !important; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.88rem; background: rgba(255,255,255,0.9); outline: none; transition: all 0.2s ease; max-width: 200px; color: #334155; }
-    .cascader-wrap select:focus,
-    .cascader-wrap input:focus { border-color: #416d9d; box-shadow: 0 0 0 3px rgba(65,109,157,0.12); background: #fff; }
-    .cascader-level { border-color: #c3d0e3 !important; background: rgba(232,238,247,0.9) !important; font-weight: 500; }
-    .cascader-picker { border-style: dashed !important; color: #416d9d; }
+    .cascader-wrap:has(input:focus) { border-color: #416d9d; box-shadow: 0 0 0 3px rgba(65,109,157,0.12); }
+    .cascader-wrap input { padding: 7px 10px !important; margin: 0 !important; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.88rem; background: #fff; outline: none; transition: all 0.2s ease; max-width: 200px; color: #334155; }
+    .cascader-wrap input:focus { border-color: #416d9d; box-shadow: 0 0 0 3px rgba(65,109,157,0.12); }
+    .cs-select { position: relative; max-width: 220px; }
+    .cs-trigger { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 9px; border: 1px solid #c3d0e3; border-radius: 8px; background: #eef3f9; color: #254267; font-family: inherit; font-size: 0.88rem; font-weight: 500; line-height: 1.3; cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; }
+    .cs-trigger:hover { border-color: #9fb4cf; background: #e7eef7; }
+    .cs-select.open .cs-trigger { border-color: #416d9d; background: #fff; box-shadow: 0 0 0 3px rgba(65,109,157,0.12); }
+    .cs-trigger-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cs-caret { width: 12px; height: 12px; flex: none; color: #7d8fa6; transition: transform 0.15s ease; }
+    .cs-select.open .cs-caret { transform: rotate(180deg); }
+    .cs-select-dashed .cs-trigger { border: 1px dashed #a9bdd6; background: #fff; color: #416d9d; font-weight: 400; }
+    .cs-select-dashed .cs-trigger:hover { border-color: #7d9dbf; background: #f8fafc; }
+    .cs-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; display: none; min-width: 100%; width: max-content; max-width: 260px; max-height: 232px; overflow-y: auto; padding: 4px; background: #fff; border: 1px solid #e5e8ee; border-radius: 10px; box-shadow: 0 10px 28px rgba(16,24,40,0.12), 0 2px 6px rgba(16,24,40,0.05); }
+    .cs-select.open .cs-menu { display: block; }
+    .cs-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; margin: 0; padding: 7px 9px; border: 0; border-radius: 6px; background: none; color: #334155; font-family: inherit; font-size: 0.88rem; font-weight: 400; text-align: left; white-space: nowrap; cursor: pointer; transition: background 0.12s ease; }
+    .cs-option:hover { background: #f1f5f9; }
+    .cs-option.is-selected { background: #eaf0f8; color: #1f3f66; font-weight: 600; }
+    .cs-option-count { color: #94a3b8; font-size: 0.78rem; font-weight: 400; }
+    .cs-option-action { margin-top: 4px; border-top: 1px solid #eef1f5; border-radius: 0 0 6px 6px; color: #416d9d; }
     .cascader-sep { color: #94a3b8; font-size: 0.85rem; padding: 0 2px; }
     .cascader-remove { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: rgba(229,62,62,0.12); color: #e53e3e; cursor: pointer; font-size: 14px; line-height: 1; transition: all 0.2s ease; margin-right: 2px; user-select: none; }
     .cascader-remove:hover { background: rgba(229,62,62,0.28); transform: scale(1.12); }
@@ -1899,6 +1911,71 @@ async exportConfig(request, env, ctx) {
           }
 
           // 级联分类选择器：从全局 categoryTree 渲染多级下拉，产出 "/" 分隔的路径
+          function closeAllSelects() {
+            document.querySelectorAll('.cs-select.open').forEach(function(el) {
+              el.classList.remove('open');
+            });
+          }
+          document.addEventListener('click', function(e) {
+            document.querySelectorAll('.cs-select.open').forEach(function(el) {
+              if (!el.contains(e.target)) el.classList.remove('open');
+            });
+          });
+
+          function makeSelect(opts) {
+            const root = document.createElement('div');
+            root.className = 'cs-select' + (opts.dashed ? ' cs-select-dashed' : '');
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'cs-trigger';
+            const label = document.createElement('span');
+            label.className = 'cs-trigger-label';
+            label.textContent = opts.current || opts.placeholder || '';
+            btn.appendChild(label);
+            btn.insertAdjacentHTML('beforeend', '<svg class="cs-caret" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+            const menu = document.createElement('div');
+            menu.className = 'cs-menu';
+            (opts.items || []).forEach(function(it) {
+              const item = document.createElement('button');
+              item.type = 'button';
+              item.className = 'cs-option' + (it.value === opts.current ? ' is-selected' : '');
+              const name = document.createElement('span');
+              name.className = 'cs-option-name';
+              name.textContent = it.label;
+              item.appendChild(name);
+              if (typeof it.count === 'number' && it.count > 0) {
+                const cnt = document.createElement('span');
+                cnt.className = 'cs-option-count';
+                cnt.textContent = it.count;
+                item.appendChild(cnt);
+              }
+              item.addEventListener('click', function() {
+                closeAllSelects();
+                opts.onPick(it.value);
+              });
+              menu.appendChild(item);
+            });
+            if (opts.newLabel) {
+              const nb = document.createElement('button');
+              nb.type = 'button';
+              nb.className = 'cs-option cs-option-action';
+              nb.textContent = opts.newLabel;
+              nb.addEventListener('click', function() {
+                closeAllSelects();
+                opts.onNew();
+              });
+              menu.appendChild(nb);
+            }
+            btn.addEventListener('click', function() {
+              const wasOpen = root.classList.contains('open');
+              closeAllSelects();
+              if (!wasOpen) root.classList.add('open');
+            });
+            root.appendChild(btn);
+            root.appendChild(menu);
+            return root;
+          }
+
           function createCascader(container, hiddenInput, initialPath) {
             if (!container) return null;
             const state = {
@@ -1963,30 +2040,27 @@ async exportConfig(request, env, ctx) {
                   sep.className = 'cascader-sep'; sep.textContent = '/';
                   wrap.appendChild(sep);
                 }
-                const sel = document.createElement('select');
-                sel.className = 'cascader-level';
-                sel.appendChild(new Option(lvl.name, lvl.name, true, true));
-                siblingsAt(idx).forEach(function(s) {
-                  if (s.name !== lvl.name) sel.appendChild(new Option(s.name, s.name));
-                });
-                sel.appendChild(new Option('✎ 改为新建', '__new__'));
-                sel.addEventListener('change', function() {
-                  const v = sel.value;
-                  if (v === '__new__') {
-                    state.chosen = state.chosen.slice(0, idx);
-                    state.pickerMode = 'input'; state.pickerInput = '';
-                    render();
-                    const inp = container.querySelector('.cascader-input');
-                    if (inp) inp.focus();
-                  } else if (v) {
+                const sel = makeSelect({
+                  current: lvl.name,
+                  items: siblingsAt(idx).map(function(s) {
+                    return { value: s.name, label: s.name };
+                  }),
+                  newLabel: '新建分类…',
+                  onPick: function(v) {
                     const sibs = siblingsAt(idx);
                     const node = findNode(sibs, v);
                     state.chosen = state.chosen.slice(0, idx);
                     state.chosen.push({ name: v, isNew: false, node: node });
                     state.pickerMode = 'select';
+                    render(); sync();
+                  },
+                  onNew: function() {
+                    state.chosen = state.chosen.slice(0, idx);
+                    state.pickerMode = 'input'; state.pickerInput = '';
                     render();
+                    const inp = container.querySelector('.cascader-input');
+                    if (inp) inp.focus();
                   }
-                  sync();
                 });
                 wrap.appendChild(sel);
 
@@ -2001,30 +2075,25 @@ async exportConfig(request, env, ctx) {
               });
 
               if (state.pickerMode === 'select') {
-                const picker = document.createElement('select');
-                picker.className = 'cascader-picker';
-                const ph = new Option(state.chosen.length === 0 ? '选择一级分类…' : '选择子分类（或者默认）…', '', true, true);
-                ph.disabled = true; ph.hidden = true;
-                picker.appendChild(ph);
-                parentChildren().forEach(function(c) {
-                  const cnt = (typeof c.site_count === 'number') ? ' (' + c.site_count + ')' : '';
-                  picker.appendChild(new Option(c.name + cnt, c.name));
-                });
-                picker.appendChild(new Option('＋ 新建分类…', '__new__'));
-                picker.addEventListener('change', function() {
-                  const v = picker.value;
-                  if (v === '__new__') {
+                const picker = makeSelect({
+                  dashed: true,
+                  placeholder: state.chosen.length === 0 ? '选择一级分类…' : '选择子分类…',
+                  items: parentChildren().map(function(c) {
+                    return { value: c.name, label: c.name, count: c.site_count };
+                  }),
+                  newLabel: '＋ 新建分类…',
+                  onPick: function(v) {
+                    const children = parentChildren();
+                    const node = findNode(children, v);
+                    state.chosen.push({ name: v, isNew: false, node: node });
+                    render(); sync();
+                  },
+                  onNew: function() {
                     state.pickerMode = 'input'; state.pickerInput = '';
                     render();
                     const inp = container.querySelector('.cascader-input');
                     if (inp) inp.focus();
-                  } else if (v) {
-                    const children = parentChildren();
-                    const node = findNode(children, v);
-                    state.chosen.push({ name: v, isNew: false, node: node });
-                    render();
                   }
-                  sync();
                 });
                 wrap.appendChild(picker);
               } else {
@@ -2042,7 +2111,7 @@ async exportConfig(request, env, ctx) {
                   state.chosen.push({ name: name, isNew: true, node: null });
                   state.pickerMode = 'select'; state.pickerInput = '';
                   render(); sync();
-                  const next = container.querySelector('.cascader-picker') || container.querySelector('.cascader-input');
+                  const next = container.querySelector('.cs-trigger') || container.querySelector('.cascader-input');
                   if (next) next.focus();
                 }
                 const ok = document.createElement('button');
