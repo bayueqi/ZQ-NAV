@@ -1,13 +1,10 @@
-/**
- * 布局与站点配置默认值。后台改过的值写进 D1 的 settings 表，这里只作首次启动的兜底
- */
 const SETTINGS_DEFAULTS = {
   admin_user: 'admin',
   admin_pass: 'admin',
   favicon_api: '',
   submission: '',
   site_title: '琪舟阁',
-  site_subtitle: '- 指路人，亦是摘星人。',
+  site_subtitle: '——— 指路人，亦是摘星人',
 };
 
 async function readSettings(env) {
@@ -43,9 +40,9 @@ async function writeSettings(env, patch) {
 /**
  * 获取图标 API URL
 */
-async function getIconApiUrl(env) {
-  const settings = await readSettings(env);
-  return settings.favicon_api || env.FaviconApi || 'https://toolb.cn/favicon/{domain}';
+async function getIconApiUrl(env, settings) {
+  const s = settings || await readSettings(env);
+  return s.favicon_api || env.FaviconApi || 'https://toolb.cn/favicon/{domain}';
 }
 
 /**
@@ -110,29 +107,43 @@ function normalizeSortOrder(value) {
 // ========== 多级分类系统 ==========
 // 未选择/未填写分类时的兜底分类名
 const DEFAULT_CATALOG = '默认';
+// 建表与迁移在实例生命周期内只执行一次，之后所有请求直接跳过
+let SCHEMA_READY = false;
+let SCHEMA_TASK = null;
+
 async function ensureCategoriesTable(env) {
-  try {
-    await env.NAV_DB.prepare(`
-      CREATE TABLE IF NOT EXISTS categories (
+  if (SCHEMA_READY) return;
+  if (!SCHEMA_TASK) {
+    SCHEMA_TASK = runSchemaSetup(env).then(() => {
+      SCHEMA_READY = true;
+    }).catch((e) => {
+      console.error('ensureCategoriesTable error:', e);
+      SCHEMA_TASK = null;
+    });
+  }
+  return SCHEMA_TASK;
+}
+
+async function runSchemaSetup(env) {
+  const db = env.NAV_DB;
+  // 建表 + 索引合并成一次批量往返
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS categories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         parent_id INTEGER DEFAULT 0,
         path TEXT NOT NULL UNIQUE,
         sort_order INTEGER DEFAULT 0,
         create_time DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `).run();
+      )`,
     // 创建管理员会话表（替代KV存储）
-    await env.NAV_DB.prepare(`
-      CREATE TABLE IF NOT EXISTS admin_sessions (
+    `CREATE TABLE IF NOT EXISTS admin_sessions (
         token TEXT PRIMARY KEY,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         expires_at DATETIME NOT NULL
-      )
-    `).run();
+      )`,
     // 书签表：旧版本要手动执行 SQL，现在首次访问自动建
-    await env.NAV_DB.prepare(`
-      CREATE TABLE IF NOT EXISTS sites (
+    `CREATE TABLE IF NOT EXISTS sites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         url TEXT NOT NULL,
@@ -143,38 +154,61 @@ async function ensureCategoriesTable(env) {
         sort_order INTEGER NOT NULL DEFAULT 9999,
         create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
         update_time DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `).run();
-    await env.NAV_DB.prepare(`
-      CREATE TABLE IF NOT EXISTS category_orders (
+      )`,
+    `CREATE TABLE IF NOT EXISTS category_orders (
         catelog TEXT PRIMARY KEY,
         sort_order INTEGER NOT NULL DEFAULT 0
-      )
-    `).run();
+      )`,
     // 站点配置：账号密码、图标 API、公开投稿开关都在这里，后台可改
-    await env.NAV_DB.prepare(`
-      CREATE TABLE IF NOT EXISTS settings (
+    `CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT
-      )
-    `).run();
+      )`,
+    // 待审核投稿
+    `CREATE TABLE IF NOT EXISTS pending_sites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        logo TEXT,
+        "desc" TEXT,
+        catelog TEXT NOT NULL,
+        status TEXT,
+        create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`
+  ];
+  try {
+    await db.batch(statements.map((sql) => db.prepare(sql)));
   } catch (e) {
     console.error('Failed to create tables:', e);
   }
+  // 索引单独一批，旧库结构异常时不影响上面的建表
+  const indexStatements = [
+    'CREATE INDEX IF NOT EXISTS idx_sites_catelog ON sites(catelog)',
+    'CREATE INDEX IF NOT EXISTS idx_sites_order ON sites(sort_order, create_time)',
+    'CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id)',
+    'CREATE INDEX IF NOT EXISTS idx_sessions_expires ON admin_sessions(expires_at)'
+  ];
+  for (const sql of indexStatements) {
+    try {
+      await db.prepare(sql).run();
+    } catch (e) {
+      // 索引建不上不影响读写，忽略
+    }
+  }
   // 清理过期会话
   try {
-    await env.NAV_DB.prepare("DELETE FROM admin_sessions WHERE expires_at < datetime('now')").run();
+    await db.prepare("DELETE FROM admin_sessions WHERE expires_at < datetime('now')").run();
   } catch (e) {
     // 表可能还不存在，忽略
   }
-  // 迁移现有分类：从 sites 表的 catelog 字段提取一级分类
+  // 迁移现有分类：从 sites 表的 catelog 字段提取（仅首次）
   try {
-    const { results: existingCats } = await env.NAV_DB.prepare('SELECT COUNT(*) as cnt FROM categories').first();
-    if (existingCats === 0) {
-      const { results: catelogs } = await env.NAV_DB.prepare(
+    const catCount = await db.prepare('SELECT COUNT(*) as cnt FROM categories').first();
+    if (catCount && Number(catCount.cnt) === 0) {
+      const { results: catelogs } = await db.prepare(
         'SELECT DISTINCT catelog FROM sites WHERE catelog IS NOT NULL AND catelog != \'\' '
       ).all();
-      for (const row of catelogs) {
+      for (const row of catelogs || []) {
         const name = (row.catelog || '').trim();
         if (!name) continue;
         // 如果包含分隔符，按路径迁移
@@ -185,11 +219,11 @@ async function ensureCategoriesTable(env) {
           const part = parts[i].trim();
           if (!part) continue;
           currentPath = currentPath ? currentPath + '/' + part : part;
-          const existing = await env.NAV_DB.prepare('SELECT id FROM categories WHERE path = ?').bind(currentPath).first();
+          const existing = await db.prepare('SELECT id FROM categories WHERE path = ?').bind(currentPath).first();
           if (existing) {
             currentParentId = existing.id;
           } else {
-            const result = await env.NAV_DB.prepare(
+            const result = await db.prepare(
               'INSERT INTO categories (name, parent_id, path, sort_order) VALUES (?, ?, ?, 0)'
             ).bind(part, currentParentId, currentPath).run();
             currentParentId = result.meta.last_row_id;
@@ -284,10 +318,10 @@ async function cleanupOrphanCategories(env) {
       if (orphans.length === 0) {
         keepGoing = false;
       } else {
-        for (const orphan of orphans) {
-          await env.NAV_DB.prepare('DELETE FROM categories WHERE id = ?').bind(orphan.id).run();
-          deleted++;
-        }
+        await env.NAV_DB.batch(orphans.map((orphan) => (
+          env.NAV_DB.prepare('DELETE FROM categories WHERE id = ?').bind(orphan.id)
+        )));
+        deleted += orphans.length;
       }
     }
     return deleted;
@@ -355,9 +389,9 @@ async function migrateDirectBookmarksToDefault(env, parentPath, parentId, creati
   await env.NAV_DB.prepare('UPDATE sites SET catelog = ? WHERE catelog = ?').bind(defaultPath, parentPath).run();
 }
 
-async function isSubmissionEnabled(env) {
-  const settings = await readSettings(env);
-  const value = settings.submission || env.ENABLE_PUBLIC_SUBMISSION;
+async function isSubmissionEnabled(env, settings) {
+  const s = settings || await readSettings(env);
+  const value = s.submission || env.ENABLE_PUBLIC_SUBMISSION;
   if (value === undefined || value === null || value === '') {
     return true;
   }
@@ -599,8 +633,11 @@ async function isAdminAuthenticated(request, env) {
                       }
                   }
   
-                  const { results } = await env.NAV_DB.prepare(query).bind(...queryBindParams).all();
-                  const countResult = await env.NAV_DB.prepare(countQuery).bind(...countQueryParams).first();
+                  const [listRes, countResult] = await Promise.all([
+                      env.NAV_DB.prepare(query).bind(...queryBindParams).all(),
+                      env.NAV_DB.prepare(countQuery).bind(...countQueryParams).first()
+                  ]);
+                  const results = (listRes && listRes.results) || [];
                   const total = countResult ? countResult.total : 0;
   
                 return new Response(
@@ -741,12 +778,13 @@ async function isAdminAuthenticated(request, env) {
                   targetSortOrder = parseInt(sort_order) || 1;
               }
               
-              await env.NAV_DB.prepare('UPDATE sites SET sort_order = sort_order + 1 WHERE sort_order >= ? AND sort_order != 9999').bind(targetSortOrder).run();
-              
-              const insert = await env.NAV_DB.prepare(`
+              const [_, insert] = await env.NAV_DB.batch([
+                  env.NAV_DB.prepare('UPDATE sites SET sort_order = sort_order + 1 WHERE sort_order >= ? AND sort_order != 9999').bind(targetSortOrder),
+                  env.NAV_DB.prepare(`
                     INSERT INTO sites (name, url, logo, desc, catelog, sort_order)
                     VALUES (?, ?, ?, ?, ?, ?)
-              `).bind(sanitizedName, sanitizedUrl, sanitizedLogo, sanitizedDesc, sanitizedCatelog, targetSortOrder).run();
+                  `).bind(sanitizedName, sanitizedUrl, sanitizedLogo, sanitizedDesc, sanitizedCatelog, targetSortOrder)
+              ]);
 
               // 自动同步分类路径（新建不存在的分类节点）
               await syncCategoryPath(env, sanitizedCatelog);
@@ -824,11 +862,11 @@ async function isAdminAuthenticated(request, env) {
               }
               const deletedSortOrder = currentResult.sort_order;
               
-              const del = await env.NAV_DB.prepare('DELETE FROM sites WHERE id = ?').bind(id).run();
-              
+              const batchStatements = [env.NAV_DB.prepare('DELETE FROM sites WHERE id = ?').bind(id)];
               if (deletedSortOrder !== 9999) {
-                  await env.NAV_DB.prepare('UPDATE sites SET sort_order = sort_order - 1 WHERE sort_order > ? AND sort_order != 9999').bind(deletedSortOrder).run();
+                  batchStatements.push(env.NAV_DB.prepare('UPDATE sites SET sort_order = sort_order - 1 WHERE sort_order > ? AND sort_order != 9999').bind(deletedSortOrder));
               }
+              const [del] = await env.NAV_DB.batch(batchStatements);
 
               // 清理可能产生的空分类
               await cleanupOrphanCategories(env);
@@ -1264,8 +1302,8 @@ async exportConfig(request, env, ctx) {
       async getSettings(request, env, ctx) {
           try {
               const s = await readSettings(env);
-              const faviconApi = await getIconApiUrl(env);
-              const submission = await isSubmissionEnabled(env);
+              const faviconApi = await getIconApiUrl(env, s);
+              const submission = await isSubmissionEnabled(env, s);
               return json({ code: 200, data: {
                   admin_user: s.admin_user, favicon_api: faviconApi, submission: submission ? 'true' : 'false',
                   site_title: s.site_title, site_subtitle: s.site_subtitle
@@ -1455,7 +1493,7 @@ async exportConfig(request, env, ctx) {
               <h2>站点设置</h2>
               <form id="settingsForm">
                 <label for="setTitle">站点名称</label>
-                <input type="text" id="setTitle" placeholder="站点名称">
+                <input type="text" id="setTitle" placeholder="默认 琪舟阁">
                 <label for="setSubtitle">副标题</label>
                 <input type="text" id="setSubtitle" placeholder="显示在首页顶部">
                 <label for="setFavicon">图标 API</label>
@@ -1548,8 +1586,9 @@ async exportConfig(request, env, ctx) {
     .modal-content form { display: flex; flex-direction: column; gap: 4px; }
     .modal-content form label { margin-bottom: 2px; font-weight: 500; color: #4a5568; font-size: 0.9rem; }
     .modal-content form input { padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.95rem; outline: none; transition: all 0.2s ease; background: rgba(255,255,255,0.8); }
-    .modal-content form input:focus { border-color: #416d9d; box-shadow: 0 0 0 3px rgba(65, 109, 157, 0.12); background: #fff; }
-    .modal-content button[type='submit'] { margin-top: 8px; background: linear-gradient(135deg, #416d9d, #305580); color: #fff; border: none; padding: 10px 18px; border-radius: 10px; cursor: pointer; font-size: 0.95rem; font-weight: 500; transition: all 0.25s ease; box-shadow: 0 4px 12px rgba(65, 109, 157, 0.3); }
+    .modal-content form input:focus { border-color: #4d7cab; box-shadow: 0 0 0 3px rgba(65, 109, 157, 0.12); background: #fff; }
+    .modal-content button[type='submit'] { margin-top: 8px; background: #3e6b9b; color: #fff; border: none; padding: 10px 18px; border-radius: 10px; cursor: pointer; font-size: 0.95rem; font-weight: 500; transition: background 0.2s ease; }
+    .modal-content button[type='submit']:hover { background: #355d88; }
     .modal-content button[type='submit']:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(65, 109, 157, 0.4); }
 .container { max-width: 1280px; margin: 0 auto; background: rgba(255, 255, 255, 0.82); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%); padding: 24px; border-radius: 20px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12); border: 1px solid rgba(255,255,255,0.3); }
     .admin-header { display: flex; flex-direction: column; gap: 16px; margin-bottom: 24px; }
@@ -1561,27 +1600,27 @@ async exportConfig(request, env, ctx) {
     
     /* 工具栏图标按钮 */
     .admin-toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
-    .toolbar-btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border: 1px solid transparent; border-radius: 12px; cursor: pointer; font-size: 0.88rem; font-weight: 600; background: #fff; color: #305580; transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease; box-shadow: 0 1px 2px rgba(48, 85, 128, 0.06); }
+    .toolbar-btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border: 1px solid transparent; border-radius: 12px; cursor: pointer; font-size: 0.88rem; font-weight: 600; background: #fff; color: #3e6b9b; transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease; box-shadow: 0 1px 2px rgba(48, 85, 128, 0.06); }
     .toolbar-btn svg { width: 18px; height: 18px; flex-shrink: 0; }
     .toolbar-btn:hover { box-shadow: 0 3px 10px rgba(48, 85, 128, 0.12); }
     .toolbar-btn:active { transform: translateY(1px); }
-    .toolbar-btn-add { background: #305580; border-color: #305580; color: #fff; }
-    .toolbar-btn-add:hover { background: #254267; border-color: #254267; filter: none; }
+    .toolbar-btn-add { background: #3e6b9b; border-color: #3e6b9b; color: #fff; }
+    .toolbar-btn-add:hover { background: #31597f; border-color: #31597f; filter: none; }
     .toolbar-btn-import,
-    .toolbar-btn-export { background: #fff; border-color: #dbe4ef; color: #305580; }
+    .toolbar-btn-export { background: #fff; border-color: #dbe4ef; color: #3e6b9b; }
     .toolbar-btn-import:hover,
     .toolbar-btn-export:hover { background: #eef3f9; border-color: #c6d5e6; filter: none; }
     .toolbar-btn-logout { background: #fff; border-color: #ecdbd8; color: #b0473f; }
     .toolbar-btn-logout:hover { background: #fdf4f3; border-color: #e3c4c0; filter: none; }
-    .toolbar-btn-settings { background: #fff; border-color: #dbe4ef; color: #305580; }
+    .toolbar-btn-settings { background: #fff; border-color: #dbe4ef; color: #3e6b9b; }
     .toolbar-btn-settings:hover { background: #eef3f9; border-color: #c6d5e6; filter: none; }
     .modal-content h2 { margin: 0 0 16px; font-size: 1.15rem; color: #2d3748; font-weight: 600; }
     .modal-confirm { max-width: 340px; margin-top: 18%; }
     .confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
     .confirm-btn { padding: 9px 18px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; color: #4a5568; font-family: inherit; font-size: 0.9rem; font-weight: 500; cursor: pointer; transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease; }
     .confirm-btn:hover { background: #f7fafc; border-color: #d5dbe3; }
-    .confirm-btn-danger { background: #b42318; border-color: #b42318; color: #fff; }
-    .confirm-btn-danger:hover { background: #96180f; border-color: #96180f; color: #fff; }
+    .confirm-btn-danger { background: #b8443a; border-color: #b8443a; color: #fff; }
+    .confirm-btn-danger:hover { background: #a13a31; border-color: #a13a31; color: #fff; }
     .settings-error { margin: 4px 0 0; padding: 8px 10px; border-radius: 8px; background: #fdf2f2; color: #b42318; font-size: 0.85rem; line-height: 1.4; }
     @media (max-width: 480px) {
         .toolbar-btn span { display: none; }
@@ -1599,22 +1638,22 @@ async exportConfig(request, env, ctx) {
         to { opacity: 1; transform: translateY(0); }
     }
  input[type="text"], input[type="number"] { padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.95rem; outline: none; margin-bottom: 5px; transition: all 0.2s ease; background: rgba(255,255,255,0.8); }
-    input[type="text"]:focus, input[type="number"]:focus { border-color: #416d9d; box-shadow: 0 0 0 3px rgba(65, 109, 157, 0.12); background: #fff; }
+    input[type="text"]:focus, input[type="number"]:focus { border-color: #4d7cab; box-shadow: 0 0 0 3px rgba(65, 109, 157, 0.12); background: #fff; }
 
     /* 级联分类选择器 */
     .cascader-host { width: 100%; }
     .cascader-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; background: rgba(255,255,255,0.7); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid #e2e8f0; border-radius: 10px; min-height: 42px; transition: all 0.2s ease; }
-    .cascader-wrap:has(input:focus) { border-color: #416d9d; box-shadow: 0 0 0 3px rgba(65,109,157,0.12); }
+    .cascader-wrap:has(input:focus) { border-color: #4d7cab; box-shadow: 0 0 0 3px rgba(65,109,157,0.12); }
     .cascader-wrap input { padding: 7px 10px !important; margin: 0 !important; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.88rem; background: #fff; outline: none; transition: all 0.2s ease; max-width: 200px; color: #334155; }
-    .cascader-wrap input:focus { border-color: #416d9d; box-shadow: 0 0 0 3px rgba(65,109,157,0.12); }
+    .cascader-wrap input:focus { border-color: #4d7cab; box-shadow: 0 0 0 3px rgba(65,109,157,0.12); }
     .cs-select { position: relative; max-width: 220px; }
-    .cs-trigger { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 9px; border: 1px solid #c3d0e3; border-radius: 8px; background: #eef3f9; color: #254267; font-family: inherit; font-size: 0.88rem; font-weight: 500; line-height: 1.3; cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; }
+    .cs-trigger { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 9px; border: 1px solid #c3d0e3; border-radius: 8px; background: #eef3f9; color: #31597f; font-family: inherit; font-size: 0.88rem; font-weight: 500; line-height: 1.3; cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; }
     .cs-trigger:hover { border-color: #9fb4cf; background: #e7eef7; }
-    .cs-select.open .cs-trigger { border-color: #416d9d; background: #fff; box-shadow: 0 0 0 3px rgba(65,109,157,0.12); }
+    .cs-select.open .cs-trigger { border-color: #4d7cab; background: #fff; box-shadow: 0 0 0 3px rgba(65,109,157,0.12); }
     .cs-trigger-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .cs-caret { width: 12px; height: 12px; flex: none; color: #7d8fa6; transition: transform 0.15s ease; }
     .cs-select.open .cs-caret { transform: rotate(180deg); }
-    .cs-select-dashed .cs-trigger { border: 1px dashed #a9bdd6; background: #fff; color: #416d9d; font-weight: 400; }
+    .cs-select-dashed .cs-trigger { border: 1px dashed #a9bdd6; background: #fff; color: #4d7cab; font-weight: 400; }
     .cs-select-dashed .cs-trigger:hover { border-color: #7d9dbf; background: #f8fafc; }
     .cs-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; display: none; min-width: 100%; width: max-content; max-width: 260px; max-height: 232px; overflow-y: auto; padding: 4px; background: #fff; border: 1px solid #e5e8ee; border-radius: 10px; box-shadow: 0 10px 28px rgba(16,24,40,0.12), 0 2px 6px rgba(16,24,40,0.05); }
     .cs-select.open .cs-menu { display: block; }
@@ -1622,16 +1661,17 @@ async exportConfig(request, env, ctx) {
     .cs-option:hover { background: #f1f5f9; }
     .cs-option.is-selected { background: #eaf0f8; color: #1f3f66; font-weight: 600; }
     .cs-option-count { color: #94a3b8; font-size: 0.78rem; font-weight: 400; }
-    .cs-option-action { margin-top: 4px; border-top: 1px solid #eef1f5; border-radius: 0 0 6px 6px; color: #416d9d; }
+    .cs-option-action { margin-top: 4px; border-top: 1px solid #eef1f5; border-radius: 0 0 6px 6px; color: #4d7cab; }
     .cascader-sep { color: #94a3b8; font-size: 0.85rem; padding: 0 2px; }
     .cascader-remove { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: rgba(229,62,62,0.12); color: #e53e3e; cursor: pointer; font-size: 14px; line-height: 1; transition: all 0.2s ease; margin-right: 2px; user-select: none; }
     .cascader-remove:hover { background: rgba(229,62,62,0.28); transform: scale(1.12); }
-    .cascader-ok { padding: 7px 12px !important; margin: 0 !important; background: #305580 !important; border-radius: 8px !important; font-size: 0.82rem !important; box-shadow: 0 2px 6px rgba(72,187,120,0.3); }
-    .cascader-ok:hover { filter: brightness(1.05); transform: translateY(-1px); }
+    .cascader-ok { padding: 7px 12px !important; margin: 0 !important; background: #3e6b9b !important; border-radius: 8px !important; font-size: 0.82rem !important; box-shadow: none; }
+    .cascader-ok:hover { background: #355d88 !important; }
     .cascader-path { margin-top: 6px; font-size: 0.8rem; color: #64748b; display: flex; align-items: center; gap: 6px; }
-    .cascader-path-label { font-weight: 600; color: #416d9d; }
+    .cascader-path-label { font-weight: 600; color: #4d7cab; }
     .cascader-path-value { color: #475569; word-break: break-all; }
-    button { background: linear-gradient(135deg, #416d9d, #305580); color: #fff; border: none; padding: 9px 16px; border-radius: 10px; cursor: pointer; font-size: 0.9rem; font-weight: 500; transition: all 0.25s ease; }
+    button { background: #3e6b9b; color: #fff; border: none; padding: 9px 16px; border-radius: 10px; cursor: pointer; font-size: 0.9rem; font-weight: 500; transition: background 0.2s ease; }
+    button:hover { background: #355d88; }
     button:hover { filter: brightness(1.1); transform: translateY(-1px); }
     .table-wrapper { overflow: auto; border-radius: 12px; flex: 1 1 auto; min-height: 0; }
     table { width: 100%; min-width: 1080px; table-layout: fixed; border-collapse: separate; border-spacing: 0; margin-bottom: 16px; border-radius: 12px; overflow: hidden; }
@@ -1673,7 +1713,7 @@ async exportConfig(request, env, ctx) {
     .category-sidebar-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid rgba(226, 232, 240, 0.5); }
     .category-sidebar-header h3 { margin: 0; font-size: 0.95rem; color: #2d3748; font-weight: 600; }
     #toggleCategorySidebar { background: none; border: none; font-size: 1.15rem; line-height: 1; cursor: pointer; color: #a0aec0; padding: 4px 8px; border-radius: 8px; transition: all 0.2s; width: auto; }
-    #toggleCategorySidebar:hover { background: rgba(65, 109, 157, 0.1); color: #416d9d; }
+    #toggleCategorySidebar:hover { background: rgba(65, 109, 157, 0.1); color: #4d7cab; }
     .category-sidebar { transition: flex-basis 0.22s ease, padding 0.22s ease; }
     .category-sidebar.collapsed { flex: 0 0 42px; padding: 10px 5px; overflow: hidden; }
     .category-sidebar.collapsed .category-sidebar-header { justify-content: center; border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
@@ -1681,8 +1721,8 @@ async exportConfig(request, env, ctx) {
     .category-sidebar.collapsed .category-sidebar-list { display: none; }
     .category-sidebar-list { list-style: none; padding: 0; margin: 0; }
     .category-sidebar-item { padding: 7px 10px; cursor: pointer; border-radius: 10px; margin-bottom: 2px; font-size: 0.87rem; color: #4a5568; transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1); display: flex; align-items: center; gap: 4px; position: relative; user-select: none; }
-    .category-sidebar-item:hover { background: rgba(65, 109, 157, 0.08); color: #416d9d; padding-left: 14px; }
-    .category-sidebar-item.active { background: linear-gradient(135deg, #416d9d, #305580); color: #fff; font-weight: 600; box-shadow: 0 2px 8px rgba(65, 109, 157, 0.3); }
+    .category-sidebar-item:hover { background: rgba(65, 109, 157, 0.08); color: #4d7cab; padding-left: 14px; }
+    .category-sidebar-item.active { background: #e7eef7; color: #2f5c8a; font-weight: 600; box-shadow: none; }
     .category-sidebar-item .cat-toggle { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; font-size: 0.6rem; transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1); flex-shrink: 0; color: #a0aec0; }
     .category-sidebar-item .cat-toggle.expanded { transform: rotate(90deg); }
     .category-sidebar-item.active .cat-toggle { color: rgba(255,255,255,0.8); }
@@ -1692,7 +1732,7 @@ async exportConfig(request, env, ctx) {
     .category-sidebar-item .cat-sort-actions { display: none; gap: 2px; flex-shrink: 0; margin-left: 2px; }
     .category-sidebar-item:hover .cat-sort-actions { display: inline-flex; }
     .category-sidebar-item .cat-sort-btn { width: 20px; height: 20px; border: none; background: rgba(0,0,0,0.05); border-radius: 6px; cursor: pointer; font-size: 0.55rem; color: #718096; display: inline-flex; align-items: center; justify-content: center; padding: 0; line-height: 1; transition: all 0.15s ease; }
-    .category-sidebar-item .cat-sort-btn:hover:not(.disabled) { background: linear-gradient(135deg, #416d9d, #305580); color: #fff; transform: scale(1.1); }
+    .category-sidebar-item .cat-sort-btn:hover:not(.disabled) { background: #3e6b9b; color: #fff; transform: scale(1.1); }
     .category-sidebar-item .cat-sort-btn.disabled { opacity: 0.3; cursor: not-allowed; }
     .category-sidebar-item.active .cat-sort-btn { background: rgba(255,255,255,0.2); color: #fff; }
     .category-sidebar-item.active .cat-sort-btn:hover:not(.disabled) { background: rgba(255,255,255,0.35); }
@@ -1702,7 +1742,7 @@ async exportConfig(request, env, ctx) {
     /* 操作按钮 */
     .actions { display: flex; gap: 6px; flex-wrap: nowrap; }
     .actions button { padding: 6px 12px; font-size: 0.8rem; border-radius: 8px; font-weight: 500; white-space: nowrap; flex: 0 0 auto; }
-    .edit-btn { background: #fff !important; color: #305580 !important; border: 1px solid #dbe4ef !important; box-shadow: none; }
+    .edit-btn { background: #fff !important; color: #3e6b9b !important; border: 1px solid #dbe4ef !important; box-shadow: none; }
     .edit-btn:hover { background: #eef3f9 !important; border-color: #c6d5e6 !important; }
     .del-btn { background: #fff !important; color: #b0473f !important; border: 1px solid #ecdbd8 !important; box-shadow: none; }
     .del-btn:hover { background: #fdf4f3 !important; border-color: #e3c4c0 !important; }
@@ -2727,9 +2767,9 @@ async exportConfig(request, env, ctx) {
     },
   
     async renderAdminPage(env) {
-    let html = await this.getFileContent('admin.html');
-    const faviconApi = await getIconApiUrl(env);
     const settings = await readSettings(env);
+    const faviconApi = await getIconApiUrl(env, settings);
+    let html = await this.getFileContent('admin.html');
     html = html
       .replace('const faviconApi = \'https://toolb.cn/favicon/{domain}\';', `const faviconApi = ${JSON.stringify(faviconApi)};`)
       .replace('<title>书签管理</title>', `<title>${escapeHTML(settings.site_title || '琪舟阁')} · 书签管理</title>`)
@@ -2761,12 +2801,12 @@ async exportConfig(request, env, ctx) {
           label { display: block; margin-bottom: 6px; font-size: 13px; color: #4b5563; }
           input { width: 100%; height: 42px; padding: 0 12px; border: 1px solid #d9dee6; border-radius: 8px; background: #ffffff; color: #111827; font-size: 15px; font-family: inherit; outline: none; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
           input:hover { border-color: #c3cad6; }
-          input:focus { border-color: #254267; box-shadow: 0 0 0 3px rgba(37, 66, 103, 0.12); }
+          input:focus { border-color: #31597f; box-shadow: 0 0 0 3px rgba(37, 66, 103, 0.12); }
           .err { margin-top: 14px; font-size: 13px; color: #b42318; }
-          button { width: 100%; height: 42px; margin-top: 24px; border: 0; border-radius: 8px; background: #254267; color: #ffffff; font-family: inherit; font-size: 15px; font-weight: 500; cursor: pointer; transition: background 0.15s ease; }
-          button:hover { background: #1d3757; }
+          button { width: 100%; height: 42px; margin-top: 24px; border: 0; border-radius: 8px; background: #3e6b9b; color: #ffffff; font-family: inherit; font-size: 15px; font-weight: 500; cursor: pointer; transition: background 0.15s ease; }
+          button:hover { background: #355d88; }
           .back { display: block; margin-top: 20px; color: #6b7280; font-size: 13px; text-align: center; text-decoration: none; }
-          .back:hover { color: #254267; }
+          .back:hover { color: #31597f; }
         </style>
       </head>
       <body>
@@ -2804,9 +2844,17 @@ async exportConfig(request, env, ctx) {
     const catalog = url.searchParams.get('catalog');
 
     let sites = [];
+    let categoryRows = null;
+    let siteSettings;
     try {
-      const { results } = await env.NAV_DB.prepare('SELECT * FROM sites ORDER BY sort_order ASC, create_time DESC').all();
-      sites = results;
+      const [sitesRes, catRes, settingsRes] = await Promise.all([
+        env.NAV_DB.prepare('SELECT * FROM sites ORDER BY sort_order ASC, create_time DESC').all(),
+        env.NAV_DB.prepare('SELECT id, name, parent_id, path, sort_order FROM categories ORDER BY sort_order ASC, id ASC').all().catch(() => null),
+        readSettings(env)
+      ]);
+      sites = sitesRes.results || [];
+      categoryRows = catRes ? (catRes.results || []) : null;
+      siteSettings = settingsRes;
     } catch (e) {
       return new Response(`Failed to fetch data: ${e.message}`, { status: 500 });
     }
@@ -2821,16 +2869,12 @@ async exportConfig(request, env, ctx) {
       siteCountMap.set(catName, (siteCountMap.get(catName) || 0) + 1);
     }
 
-    // 从 categories 表获取分类树
+    // 从 categories 表获取分类树（查询已在上面并行完成）
     let categoryTree = [];
     let flatCats = [];
-    try {
+    if (categoryRows) {
       // 孤儿分类在写操作中统一清理，读取（首页）不再重复清理以减少每次访问的 DB 开销
-      const { results: catRows } = await env.NAV_DB.prepare(
-        'SELECT id, name, parent_id, path, sort_order FROM categories ORDER BY sort_order ASC, id ASC'
-      ).all();
-      
-      const catsWithCount = catRows.map(c => ({
+      const catsWithCount = categoryRows.map(c => ({
         ...c,
         site_count: siteCountMap.get(c.path) || 0
       }));
@@ -2841,7 +2885,7 @@ async exportConfig(request, env, ctx) {
       // 剪枝：过滤空分类
       categoryTree = pruneEmptyCategories(categoryTree);
       flatCats = flattenCategoryTree(categoryTree);
-    } catch (e) {
+    } else {
       // categories表可能不存在，降级为从sites提取
       const categoryMinSort = new Map();
       const categorySet = new Set();
@@ -2928,9 +2972,8 @@ async exportConfig(request, env, ctx) {
     const headingText = escapeHTML(headingPlainText);
     const headingDefaultAttr = escapeHTML(headingPlainText);
     const headingActiveAttr = catalogExists ? escapeHTML(currentCatalog) : '';
-    const submissionEnabled = await isSubmissionEnabled(env);
-    const faviconApi = await getIconApiUrl(env);
-    const siteSettings = await readSettings(env);
+    const submissionEnabled = await isSubmissionEnabled(env, siteSettings);
+    const faviconApi = await getIconApiUrl(env, siteSettings);
 
     // 优化后的 HTML
     const html = `
@@ -2953,9 +2996,9 @@ async exportConfig(request, env, ctx) {
                   200: '#c3d0e3',
                   300: '#9cb3d1',
                   400: '#6c8fba',
-                  500: '#416d9d',
-                  600: '#305580',
-                  700: '#254267',
+                  500: '#4d7cab',
+                  600: '#3e6b9b',
+                  700: '#31597f',
                   800: '#1d3552',
                   900: '#192e45',
                   950: '#101e2d',
@@ -3040,7 +3083,7 @@ async exportConfig(request, env, ctx) {
         .category-link { transition: background 0.2s ease, color 0.2s ease; position: relative; }
         .category-link:hover { background: rgba(65, 109, 157, 0.06); }
         .category-link.active { background: linear-gradient(135deg, rgba(65, 109, 157, 0.1), rgba(65, 109, 157, 0.05)) !important; }
-        .category-link.active::before { content: ''; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 2px; background: #305580; }
+        .category-link.active::before { content: ''; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 2px; background: #3e6b9b; }
         
         /* 页脚毛玻璃 */
         .glass-footer { background: rgba(255, 255, 255, 0.5) !important; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-top: 1px solid rgba(255, 255, 255, 0.5) !important; }
@@ -3058,7 +3101,7 @@ async exportConfig(request, env, ctx) {
         .preview-modal.visible { opacity: 1 !important; visibility: visible !important; }
         
         /* 头部渐变增强 */
-        .hero-header { background: linear-gradient(135deg, #254267 0%, #305580 50%, #416d9d 100%) !important; position: relative; overflow: hidden; }
+        .hero-header { background: linear-gradient(135deg, #4a78a5 0%, #5e8db8 55%, #78a5cc 100%) !important; position: relative; overflow: hidden; }
         .hero-header::before { content: ''; position: absolute; top: -50%; right: -20%; width: 600px; height: 600px; background: radial-gradient(circle, rgba(210, 170, 121, 0.15) 0%, transparent 70%); pointer-events: none; }
         .hero-header::after { content: ''; position: absolute; bottom: -30%; left: -10%; width: 400px; height: 400px; background: radial-gradient(circle, rgba(97, 180, 138, 0.1) 0%, transparent 70%); pointer-events: none; }
         
