@@ -1461,7 +1461,7 @@ async exportConfig(request, env, ctx) {
                 <label for="setFavicon">图标 API</label>
                 <input type="text" id="setFavicon" placeholder="默认 https://toolb.cn/favicon/{domain}">
                 <label for="setUser">管理员账号</label>
-                <input type="text" id="setUser" autocomplete="username">
+                <input type="text" id="setUser" autocomplete="username" placeholder="admin">
                 <label for="setNewPass">新密码</label>
                 <input type="password" id="setNewPass" autocomplete="new-password" placeholder="不修改就留空">
                 <p class="settings-error" id="settingsError" style="display:none;"></p>
@@ -2735,8 +2735,7 @@ async exportConfig(request, env, ctx) {
       .replace('<title>书签管理</title>', `<title>${escapeHTML(settings.site_title || '琪舟阁')} · 书签管理</title>`)
       .replace('<input type="text" id="setTitle" placeholder="站点名称">', () => `<input type="text" id="setTitle" placeholder="站点名称" value="${escapeHTML(settings.site_title || '')}">`)
       .replace('<input type="text" id="setSubtitle" placeholder="显示在首页顶部">', () => `<input type="text" id="setSubtitle" placeholder="显示在首页顶部" value="${escapeHTML(settings.site_subtitle || '')}">`)
-      .replace('<input type="text" id="setFavicon" placeholder="https://toolb.cn/favicon/{domain}">', () => `<input type="text" id="setFavicon" placeholder="https://toolb.cn/favicon/{domain}" value="${escapeHTML(settings.favicon_api || '')}">`)
-      .replace('<input type="text" id="setUser" autocomplete="username">', () => `<input type="text" id="setUser" autocomplete="username" value="${escapeHTML(settings.admin_user || 'admin')}">`);
+      .replace('<input type="text" id="setFavicon" placeholder="https://toolb.cn/favicon/{domain}">', () => `<input type="text" id="setFavicon" placeholder="https://toolb.cn/favicon/{domain}" value="${escapeHTML(settings.favicon_api || '')}">`);
     return new Response(html, {
         headers: {'Content-Type': 'text/html; charset=utf-8'}
     });
@@ -2776,11 +2775,11 @@ async exportConfig(request, env, ctx) {
           <form method="post" action="/admin" novalidate>
             <div class="field">
               <label for="username">用户名</label>
-              <input type="text" id="username" name="name" required autocomplete="username" placeholder="admin">
+              <input type="text" id="username" name="name" required autocomplete="username">
             </div>
             <div class="field">
               <label for="password">密码</label>
-              <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="admin">
+              <input type="password" id="password" name="password" required autocomplete="current-password">
             </div>
             <p class="err"${hasError ? '' : ' style="display:none;"'}>${hasError ? safeMessage : '用户名或密码错误'}</p>
             <button type="submit">登录</button>
