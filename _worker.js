@@ -1073,6 +1073,8 @@ async exportConfig(request, env, ctx) {
         try{
           const url = new URL(request.url);
           const rawIds = (url.searchParams.get('ids') || '').trim();
+          // 只导出业务字段：id、create_time、update_time 由数据库自己维护，导入时会重新生成
+          const EXPORT_FIELDS = 'name, url, logo, desc, catelog, sort_order';
           let results = [];
           let filename = 'config.json';
           if (rawIds) {
@@ -1080,12 +1082,14 @@ async exportConfig(request, env, ctx) {
             if (ids.length === 0) return this.errorResponse('未选择任何书签', 400);
             const marks = ids.map(() => '?').join(',');
             const res = await env.NAV_DB.prepare(
-              `SELECT * FROM sites WHERE id IN (${marks}) ORDER BY sort_order ASC, create_time DESC`
+              `SELECT ${EXPORT_FIELDS} FROM sites WHERE id IN (${marks}) ORDER BY sort_order ASC, create_time DESC`
             ).bind(...ids).all();
             results = res.results || [];
             filename = 'config-selected.json';
           } else {
-            const res = await env.NAV_DB.prepare('SELECT * FROM sites ORDER BY sort_order ASC, create_time DESC').all();
+            const res = await env.NAV_DB.prepare(
+              `SELECT ${EXPORT_FIELDS} FROM sites ORDER BY sort_order ASC, create_time DESC`
+            ).all();
             results = res.results || [];
           }
           const pureJsonData = JSON.stringify(results, null, 2); 
@@ -1683,7 +1687,7 @@ async exportConfig(request, env, ctx) {
                           <button type="button" class="batch-pick-all" id="batchPickAll">选择全部</button>
                           <button type="button" class="batch-btn" id="batchMoveBtn">迁移分类</button>
                           <button type="button" class="batch-btn" id="batchExportBtn">导出选中</button>
-                          <button type="button" class="batch-btn batch-btn-danger" id="batchDeleteBtn">删除</button>
+                          <button type="button" class="batch-btn batch-btn-danger" id="batchDeleteBtn">删除所选</button>
                           <button type="button" class="batch-clear" id="batchClearBtn">取消</button>
                         </div>
                         <div class="table-wrapper">
