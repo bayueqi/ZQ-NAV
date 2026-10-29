@@ -2,7 +2,6 @@ const SETTINGS_DEFAULTS = {
   admin_user: 'admin',
   admin_pass: 'admin',
   favicon_api: '',
-  submission: '',
   site_title: '琪舟阁',
   site_subtitle: '——— 指路人，亦是摘星人',
 };
@@ -190,21 +189,10 @@ async function runSchemaSetup(env) {
         catelog TEXT PRIMARY KEY,
         sort_order INTEGER NOT NULL DEFAULT 0
       )`,
-    // 站点配置：账号密码、图标 API、公开投稿开关都在这里，后台可改
+    // 站点配置：账号密码、图标 API、站点名称都在这里，后台可改
     `CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT
-      )`,
-    // 待审核投稿
-    `CREATE TABLE IF NOT EXISTS pending_sites (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        url TEXT NOT NULL,
-        logo TEXT,
-        "desc" TEXT,
-        catelog TEXT NOT NULL,
-        status TEXT,
-        create_time DATETIME DEFAULT CURRENT_TIMESTAMP
       )`
   ];
   try {
@@ -426,15 +414,6 @@ async function migrateDirectBookmarksToDefault(env, parentPath, parentId, creati
   await env.NAV_DB.prepare('UPDATE sites SET catelog = ? WHERE catelog = ?').bind(defaultPath, parentPath).run();
 }
 
-function isSubmissionEnabled(env, settings) {
-  const s = settings || {};
-  const value = s.submission || (env && env.ENABLE_PUBLIC_SUBMISSION);
-  if (value === undefined || value === null || value === '') {
-    return true;
-  }
-  return String(value).trim().toLowerCase() === 'true';
-}
-
 const SESSION_COOKIE_NAME = 'nav_admin_session';
 const SESSION_TTL_SECONDS = 60 * 60 * 12; // 12小时会话
 
@@ -553,12 +532,6 @@ async function isAdminAuthenticated(request, env) {
                         return this.errorResponse('Method Not Allowed', 405)
                 }
             }
-            if (path === '/config/submit' && method === 'POST') {
-              if (!isSubmissionEnabled(env, await readSettings(env))) {
-                return this.errorResponse('Public submission disabled', 403);
-              }
-              return await this.submitConfig(request, env, ctx);
-           }
            if (path === '/categories') {
               if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
               if (method === 'GET') {
@@ -608,19 +581,7 @@ async function isAdminAuthenticated(request, env) {
                         return this.errorResponse('Method Not Allowed', 405)
                 }
             }
-              if (path.startsWith('/pending/') && /^\d+$/.test(id)) {
-                switch (method) {
-                    case 'PUT':
-                        if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
-                        return await this.approvePendingConfig(request, env, ctx, id);
-                    case 'DELETE':
-                        if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
-                        return await this.rejectPendingConfig(request, env, ctx, id);
-                    default:
-                        return this.errorResponse('Method Not Allowed', 405)
-                }
-            }
-            if (path === '/config/batch' && method === 'POST') {
+              if (path === '/config/batch' && method === 'POST') {
                 if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
                 return await this.batchConfig(request, env, ctx);
             }
@@ -635,10 +596,6 @@ async function isAdminAuthenticated(request, env) {
             if (path === '/config/export' && method === 'GET') {
                 if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
                 return await this.exportConfig(request, env, ctx);
-            }
-            if (path === '/pending' && method === 'GET') {
-              if (!(await isAdminAuthenticated(request, env))) return this.errorResponse('Unauthorized', 401);
-              return await this.getPendingConfig(request, env, ctx, url);
             }
             if (path === '/logout' && method === 'POST') {
               return await this.logout(request, env, ctx);
@@ -763,103 +720,6 @@ async function isAdminAuthenticated(request, env) {
         } catch (e) {
           return this.errorResponse(`读取书签列表失败: ${e.message}`, 500);
         }
-      },
-      async getPendingConfig(request, env, ctx, url) {
-            const page = parseInt(url.searchParams.get('page') || '1', 10);
-            const pageSize = parseInt(url.searchParams.get('pageSize') || '10', 10);
-            const offset = (page - 1) * pageSize;
-            try {
-                const { results } = await env.NAV_DB.prepare(`
-                        SELECT * FROM pending_sites ORDER BY create_time DESC LIMIT ? OFFSET ?
-                    `).bind(pageSize, offset).all();
-                  const countResult = await env.NAV_DB.prepare(`
-                      SELECT COUNT(*) as total FROM pending_sites
-                      `).first();
-                const total = countResult ? countResult.total : 0;
-                  return new Response(
-                      JSON.stringify({
-                        code: 200,
-                        data: results,
-                          total,
-                        page,
-                        pageSize
-                      }),
-                      {headers: {'Content-Type': 'application/json'}}
-                  );
-            } catch (e) {
-                return this.errorResponse(`Failed to fetch pending config data: ${e.message}`, 500);
-            }
-        },
-        async approvePendingConfig(request, env, ctx, id) {
-            try {
-                const { results } = await env.NAV_DB.prepare('SELECT * FROM pending_sites WHERE id = ?').bind(id).all();
-                if(results.length === 0) {
-                    return this.errorResponse('Pending config not found', 404);
-                }
-                const config = results[0];
-                // 兜底：审核入库时若分类为空则使用默认分类
-                const approvedCatelog = (config.catelog && config.catelog.trim()) ? config.catelog.trim() : DEFAULT_CATALOG;
-                let targetSortOrder = 1;
-                if (!config.sort_order || config.sort_order === '' || config.sort_order === 9999) {
-                    const maxSortResult = await env.NAV_DB.prepare('SELECT MAX(sort_order) as max_sort FROM sites WHERE sort_order != 9999').first();
-                    targetSortOrder = (maxSortResult && maxSortResult.max_sort ? maxSortResult.max_sort + 1 : 1);
-                } else {
-                    targetSortOrder = parseInt(config.sort_order) || 1;
-                }
-                await env.NAV_DB.prepare('UPDATE sites SET sort_order = sort_order + 1 WHERE sort_order >= ? AND sort_order != 9999').bind(targetSortOrder).run();
-                await env.NAV_DB.prepare(`
-                    INSERT INTO sites (name, url, desc, logo, catelog, sort_order)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                `).bind(config.name, config.url, config.desc, config.logo, approvedCatelog, targetSortOrder).run();
-                await env.NAV_DB.prepare('DELETE FROM pending_sites WHERE id = ?').bind(id).run();
-                // 同步分类路径并清理空分类
-                await syncCategoryPath(env, approvedCatelog);
-                await cleanupOrphanCategories(env);
-                return json({
-                    code: 200,
-                    message: 'Pending config approved successfully'
-                })
-            }catch(e) {
-                return this.errorResponse(`Failed to approve pending config : ${e.message}`, 500);
-            }
-        },
-        async rejectPendingConfig(request, env, ctx, id) {
-            try{
-                await env.NAV_DB.prepare('DELETE FROM pending_sites WHERE id = ?').bind(id).run();
-                return json({
-                    code: 200,
-                    message: 'Pending config rejected successfully',
-                });
-            } catch(e) {
-                return this.errorResponse(`Failed to reject pending config: ${e.message}`, 500);
-            }
-        },
-       async submitConfig(request, env, ctx) {
-          try{
-              // 投稿开关统一在路由层校验，这里不再重复读设置
-              const config = await request.json();
-              const { name, url, logo, desc, catelog } = config;
-              const sanitizedName = (name || '').trim();
-              const sanitizedUrl = (url || '').trim();
-              const sanitizedCatelog = (catelog || '').trim() || DEFAULT_CATALOG;
-              const sanitizedLogo = (logo || '').trim() || null;
-              const sanitizedDesc = (desc || '').trim() || null;
-
-              if (!sanitizedName || !sanitizedUrl) {
-                  return this.errorResponse('Name and URL are required', 400);
-              }
-              await env.NAV_DB.prepare(`
-                  INSERT INTO pending_sites (name, url, logo, desc, catelog)
-                  VALUES (?, ?, ?, ?, ?)
-            `).bind(sanitizedName, sanitizedUrl, sanitizedLogo, sanitizedDesc, sanitizedCatelog).run();
-  
-            return json({
-              code: 201,
-              message: 'Config submitted successfully, waiting for admin approve',
-            }, 201)
-          } catch(e) {
-              return this.errorResponse(`Failed to submit config : ${e.message}`, 500);
-          }
       },
       
       
@@ -1431,14 +1291,13 @@ async exportConfig(request, env, ctx) {
               return this.errorResponse(`Failed to logout: ${e.message}`, 500);
           }
       },
-      // 站点设置：账号密码、图标 API、公开投稿开关。只给已登录的管理员读写
+      // 站点设置：账号密码、图标 API、站点名称。只给已登录的管理员读写
       async getSettings(request, env, ctx) {
           try {
               const s = await readSettings(env);
               const faviconApi = getIconApiUrl(env, s);
-              const submission = isSubmissionEnabled(env, s);
               return json({ code: 200, data: {
-                  admin_user: s.admin_user, favicon_api: faviconApi, submission: submission ? 'true' : 'false',
+                  admin_user: s.admin_user, favicon_api: faviconApi,
                   site_title: s.site_title, site_subtitle: s.site_subtitle
               } });
           } catch (e) {
@@ -1458,7 +1317,6 @@ async exportConfig(request, env, ctx) {
                   patch.admin_pass = nextPass;
               }
               if (body.favicon_api !== undefined) patch.favicon_api = String(body.favicon_api || '').trim() || SETTINGS_DEFAULTS.favicon_api;
-              if (body.submission !== undefined) patch.submission = body.submission ? 'true' : 'false';
               if (body.site_title !== undefined) patch.site_title = String(body.site_title || '').trim() || SETTINGS_DEFAULTS.site_title;
               if (body.site_subtitle !== undefined) patch.site_subtitle = String(body.site_subtitle || '').trim();
               if (!Object.keys(patch).length) return this.errorResponse('没有需要保存的修改', 400);
@@ -3038,7 +2896,7 @@ async exportConfig(request, env, ctx) {
             });
           }
 
-          // 站点设置：账号密码、图标 API、投稿开关、站点名称
+          // 站点设置：账号密码、图标 API、站点名称
           const settingsBtn = document.getElementById('settingsBtn');
           const settingsModal = document.getElementById('settingsModal');
           const settingsModalClose = document.getElementById('settingsModalClose');
@@ -3306,7 +3164,6 @@ async exportConfig(request, env, ctx) {
     const headingText = escapeHTML(headingPlainText);
     const headingDefaultAttr = escapeHTML(headingPlainText);
     const headingActiveAttr = catalogExists ? escapeHTML(currentCatalog) : '';
-    const submissionEnabled = isSubmissionEnabled(env, siteSettings);
     const faviconApi = getIconApiUrl(env, siteSettings);
 
     // 优化后的 HTML
@@ -3561,24 +3418,32 @@ async exportConfig(request, env, ctx) {
             </div>
           </div>
           
-          <a href="https://github.com/bayueqi/ZQ-NAV" target="_blank" class="mt-4 flex items-center px-4 py-2 text-gray-600 hover:text-primary-500 transition duration-300">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-              </svg>
-              项目地址
-            </a>
-
-            <a href="/admin" target="_blank" class="mt-4 flex items-center px-4 py-2 text-gray-600 hover:text-primary-500 transition duration-300">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
-              </svg>
+          <div class="mt-5 pt-4 border-t border-gray-200/70 space-y-1">
+            <a href="/admin" target="_blank" class="group flex items-center gap-3 px-3 py-2 rounded-xl text-sm text-gray-600 hover:bg-primary-50 hover:text-primary-600 transition-colors">
+              <span class="w-8 h-8 rounded-lg bg-primary-50 text-primary-500 flex items-center justify-center shrink-0 group-hover:bg-primary-100 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.755 6.755 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.28z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </span>
               后台管理
             </a>
 
-            <a href="https://qizhouPavilion.520jk.cc.cd" target="_blank" class="mt-4 flex items-center px-4 py-2 text-gray-600 hover:text-primary-500 transition duration-300">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25m18 0A2.25 2.25 0 0018.75 3H5.25A2.25 2.25 0 003 5.25" />
-              </svg>
+            <a href="https://github.com/bayueqi/ZQ-NAV" target="_blank" class="group flex items-center gap-3 px-3 py-2 rounded-xl text-sm text-gray-600 hover:bg-primary-50 hover:text-primary-600 transition-colors">
+              <span class="w-8 h-8 rounded-lg bg-primary-50 text-primary-500 flex items-center justify-center shrink-0 group-hover:bg-primary-100 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
+                </svg>
+              </span>
+              项目地址
+            </a>
+
+            <a href="https://qizhouPavilion.520jk.cc.cd" target="_blank" class="group flex items-center gap-3 px-3 py-2 rounded-xl text-sm text-gray-600 hover:bg-primary-50 hover:text-primary-600 transition-colors">
+              <span class="w-8 h-8 rounded-lg bg-primary-50 text-primary-500 flex items-center justify-center shrink-0 group-hover:bg-primary-100 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M6.429 9.75L2.25 12l4.179 2.25m0-4.5l5.571 3 5.571-3m-11.142 0L2.25 7.5 12 2.25l9.75 5.25-4.179 2.25m0 0L21.75 12l-4.179 2.25m0 0l4.179 2.25L12 21.75 2.25 16.5l4.179-2.25m11.142 0l-5.571 3-5.571-3" />
+                </svg>
+              </span>
               配套软件
             </a>
           </div>
