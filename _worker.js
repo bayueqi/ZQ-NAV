@@ -2664,18 +2664,19 @@ async exportConfig(request, env, ctx) {
         <style>
           *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
           html, body { height: 100%; }
-          body { display: flex; align-items: center; justify-content: center; padding: 24px; background: #f6f3ee; color: #1f2933; font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-          .login { width: 100%; max-width: 344px; border-top: 3px solid #254267; padding-top: 28px; }
-          .login h1 { font-size: 1.1rem; font-weight: 600; letter-spacing: 0.01em; }
-          form { margin-top: 26px; }
+          body { display: flex; align-items: center; justify-content: center; padding: 24px; background: #f4f5f7; color: #111827; font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+          .login { width: 100%; max-width: 380px; padding: 32px 28px; background: #ffffff; border: 1px solid #e6e8ec; border-radius: 10px; box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 12px 32px rgba(16, 24, 40, 0.06); }
+          .login h1 { font-size: 20px; font-weight: 600; color: #111827; }
+          form { margin-top: 24px; }
           .field + .field { margin-top: 16px; }
-          label { display: block; margin-bottom: 6px; font-size: 12px; color: #5d6b7a; letter-spacing: 0.04em; }
-          input { width: 100%; height: 42px; padding: 0 12px; border: 1px solid #d5dbe3; border-radius: 6px; background: #fff; color: #1f2933; font-size: 14px; font-family: inherit; outline: none; transition: border-color 0.15s ease; }
-          input:focus { border-color: #254267; }
-          .err { margin-top: 14px; font-size: 13px; color: #c0392b; }
-          button { width: 100%; height: 42px; margin-top: 22px; border: 0; border-radius: 6px; background: #254267; color: #fff; font-family: inherit; font-size: 14px; font-weight: 500; letter-spacing: 0.06em; cursor: pointer; transition: background 0.15s ease; }
-          button:hover { background: #1c3454; }
-          .back { display: block; margin-top: 28px; padding-top: 18px; border-top: 1px solid #e2e6ec; color: #5d6b7a; font-size: 13px; text-decoration: none; }
+          label { display: block; margin-bottom: 6px; font-size: 13px; color: #4b5563; }
+          input { width: 100%; height: 42px; padding: 0 12px; border: 1px solid #d9dee6; border-radius: 8px; background: #ffffff; color: #111827; font-size: 15px; font-family: inherit; outline: none; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+          input:hover { border-color: #c3cad6; }
+          input:focus { border-color: #254267; box-shadow: 0 0 0 3px rgba(37, 66, 103, 0.12); }
+          .err { margin-top: 14px; font-size: 13px; color: #b42318; }
+          button { width: 100%; height: 42px; margin-top: 24px; border: 0; border-radius: 8px; background: #254267; color: #ffffff; font-family: inherit; font-size: 15px; font-weight: 500; cursor: pointer; transition: background 0.15s ease; }
+          button:hover { background: #1d3757; }
+          .back { display: inline-block; margin-top: 20px; color: #6b7280; font-size: 13px; text-decoration: none; }
           .back:hover { color: #254267; }
         </style>
       </head>
