@@ -2751,21 +2751,6 @@ async exportConfig(request, env, ctx) {
       return new Response(`Failed to fetch data: ${e.message}`, { status: 500 });
     }
 
-    if (!sites || sites.length === 0) {
-      const bootSettings = await readSettings(env);
-      const emptyHtml = `<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${escapeHTML(bootSettings.site_title)}</title>
-<style>
-  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #fdf8f3; font-family: 'Noto Sans SC', -apple-system, sans-serif; color: #2d3748; }
-  .box { text-align: center; padding: 40px 36px; background: #fff; border: 1px solid #e2e8f0; border-radius: 20px; box-shadow: 0 12px 36px rgba(37, 66, 103, 0.08); }
-  h1 { margin: 0 0 24px; font-size: 1.4rem; font-weight: 600; }
-  a { display: inline-block; padding: 11px 26px; border-radius: 12px; background: linear-gradient(135deg, #416d9d, #305580); color: #fff; text-decoration: none; font-weight: 600; }
-</style></head>
-<body><div class="box"><h1>${escapeHTML(bootSettings.site_title)}</h1><a href="/admin">进入后台</a></div></body></html>`;
-      return new Response(emptyHtml, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
-    }
-
     const totalSites = sites.length;
 
     // 先计算每个分类的书签数量
@@ -3219,7 +3204,7 @@ async exportConfig(request, env, ctx) {
           </div>
           
           <!-- 网站卡片网格 -->
-          <div class="rounded-2xl border border-white/40 bg-white/40 backdrop-blur-md p-4 sm:p-6 shadow-sm">
+          <div class="rounded-2xl ${currentSites.length ? 'border border-white/40 bg-white/40 backdrop-blur-md p-4 sm:p-6 shadow-sm' : 'hidden'}">
             <div id="sitesGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
               ${currentSites.map((site, idx) => {
               const rawName = site.name || '未命名';
