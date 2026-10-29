@@ -657,11 +657,39 @@ async function isAdminAuthenticated(request, env) {
           ));
           if (ids.length === 0) return this.errorResponse('未选择任何书签', 400);
           if (ids.length > 1000) return this.errorResponse('单次最多处理 1000 条', 400);
-          if (action !== 'move' && action !== 'delete') return this.errorResponse('不支持的操作', 400);
+          if (action !== 'move' && action !== 'delete' && action !== 'reorder') return this.errorResponse('不支持的操作', 400);
 
           const CHUNK = 50;
           let affected = 0;
-          if (action === 'move') {
+          if (action === 'reorder') {
+            // 以选中项中最靠前的一项为起点，选中项连续排列，其余书签顺延；
+            // 全部重新编号为 1..N，避免出现重复或空洞。
+            const { results } = await env.NAV_DB.prepare(
+              'SELECT id, sort_order FROM sites ORDER BY sort_order ASC, create_time DESC, id ASC'
+            ).all();
+            const list = results || [];
+            if (!list.length) return this.errorResponse('没有可排序的书签', 400);
+            const idSet = new Set(ids);
+            const picked = list.filter(row => idSet.has(row.id));
+            if (!picked.length) return this.errorResponse('所选书签不存在', 400);
+            const anchorId = picked[0].id;
+            const anchorIndex = list.findIndex(row => row.id === anchorId);
+            const nextOrder = list.slice(0, anchorIndex).concat(picked);
+            for (let i = anchorIndex; i < list.length; i += 1) {
+              if (!idSet.has(list[i].id)) nextOrder.push(list[i]);
+            }
+            const updates = [];
+            nextOrder.forEach((row, index) => {
+              const target = index + 1;
+              if (row.sort_order !== target) {
+                updates.push(env.NAV_DB.prepare('UPDATE sites SET sort_order = ? WHERE id = ?').bind(target, row.id));
+              }
+            });
+            for (let i = 0; i < updates.length; i += CHUNK) {
+              await env.NAV_DB.batch(updates.slice(i, i + CHUNK));
+            }
+            affected = picked.length;
+          } else if (action === 'move') {
             const target = String(body.catelog || '').trim();
             if (!target) return this.errorResponse('请选择目标分类', 400);
             await syncCategoryPath(env, target);
@@ -686,7 +714,7 @@ async function isAdminAuthenticated(request, env) {
           }
           return new Response(JSON.stringify({
             code: 200,
-            message: action === 'move' ? '已迁移' : '已删除',
+            message: action === 'move' ? '已迁移' : (action === 'reorder' ? '已重新排序' : '已删除'),
             data: { affected }
           }), { headers: { 'Content-Type': 'application/json' } });
         } catch (e) {
@@ -1554,10 +1582,26 @@ async exportConfig(request, env, ctx) {
                         <div class="batch-bar" id="batchBar">
                           <span class="batch-count" id="batchCount">已选 0 项</span>
                           <button type="button" class="batch-pick-all" id="batchPickAll">选择全部</button>
-                          <button type="button" class="batch-btn" id="batchMoveBtn">迁移分类</button>
-                          <button type="button" class="batch-btn" id="batchExportBtn">导出选中</button>
-                          <button type="button" class="batch-btn batch-btn-danger" id="batchDeleteBtn">删除所选</button>
-                          <button type="button" class="batch-clear" id="batchClearBtn">取消</button>
+                          <button type="button" class="batch-btn" id="batchMoveBtn">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" /></svg>
+                            迁移分类
+                          </button>
+                          <button type="button" class="batch-btn" id="batchReorderBtn">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7.5L7.5 3m0 0L12 7.5M7.5 3v13.5m13.5 0L16.5 21m0 0L12 16.5m4.5 4.5V7.5" /></svg>
+                            重新排序
+                          </button>
+                          <button type="button" class="batch-btn" id="batchExportBtn">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
+                            导出选中
+                          </button>
+                          <button type="button" class="batch-btn batch-btn-danger" id="batchDeleteBtn">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" /></svg>
+                            删除所选
+                          </button>
+                          <button type="button" class="batch-clear" id="batchClearBtn">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                            取消
+                          </button>
                         </div>
                         <div class="table-wrapper">
                         <table id="configTable">
@@ -1719,16 +1763,21 @@ async exportConfig(request, env, ctx) {
     tbody tr.selected { background: rgba(77, 124, 171, 0.08); }
     tbody tr.selected:hover { background: rgba(77, 124, 171, 0.12); }
     /* 批量操作条：有选中项时出现 */
-    .batch-bar { display: none; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 12px; margin-bottom: 10px; border: 1px solid #dbe3ee; border-radius: 10px; background: #f4f7fb; font-size: 0.85rem; color: #34455c; }
+    .batch-bar { display: none; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 8px; padding: 9px 12px; margin-bottom: 10px; border: 1px solid #e4eaf3; border-radius: 12px; background: #fff; box-shadow: 0 1px 2px rgba(31, 51, 78, 0.04); font-size: 0.84rem; color: #33465e; }
     .batch-bar.visible { display: flex; }
-    .batch-count { font-weight: 600; color: #2f4a67; }
-    .batch-pick-all { border: 0; background: none; padding: 0; color: #3e6b9b; font-family: inherit; font-size: 0.85rem; cursor: pointer; text-decoration: underline; }
-    .batch-pick-all:hover { background: none; filter: none; transform: none; color: #2f5580; }
-    .batch-btn { border: 1px solid #cfd9e6; background: #fff; color: #33465e; font-family: inherit; font-size: 0.82rem; font-weight: 500; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
-    .batch-btn:hover { background: #f9fbfd; border-color: #b7c5d8; }
-    .batch-btn-danger { border-color: #e3c6c2; color: #a2402f; }
-    .batch-btn-danger:hover { background: #fdf5f4; border-color: #d9b3ad; }
-    .batch-clear { margin-left: auto; border: 0; background: none; color: #6b7c93; font-family: inherit; font-size: 0.82rem; padding: 6px 4px; cursor: pointer; }
+    .batch-count { display: inline-flex; align-items: center; gap: 7px; padding-right: 12px; margin-right: 2px; border-right: 1px solid #e9eef6; font-weight: 600; color: #2f4a67; }
+    .batch-count::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #4d7cab; }
+    .batch-pick-all { display: inline-flex; align-items: center; height: 28px; padding: 0 11px; border: 1px solid #cddcee; border-radius: 999px; background: #f3f7fc; color: #3e6b9b; font-family: inherit; font-size: 0.8rem; font-weight: 500; cursor: pointer; transition: background 0.18s ease, border-color 0.18s ease; }
+    .batch-pick-all:hover { background: #e9f1fa; border-color: #b3c9e2; filter: none; transform: none; }
+    .batch-btn { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border: 1px solid #dbe2ec; border-radius: 8px; background: #fff; color: #33465e; font-family: inherit; font-size: 0.8rem; font-weight: 500; cursor: pointer; transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease; }
+    .batch-btn svg { width: 14px; height: 14px; opacity: 0.72; }
+    .batch-btn:hover { background: #f7fafd; border-color: #b9c9dc; color: #2f4a67; filter: none; transform: none; }
+    .batch-btn-danger { border-color: #e8cbc6; color: #a2402f; }
+    .batch-btn-danger svg { opacity: 0.85; }
+    .batch-btn-danger:hover { background: #fdf5f4; border-color: #dbb0a9; color: #8f3527; }
+    .batch-clear { display: inline-flex; align-items: center; gap: 3px; height: 28px; margin-left: auto; padding: 0 10px; border: 1px solid transparent; border-radius: 8px; background: none; color: #7a8899; font-family: inherit; font-size: 0.8rem; cursor: pointer; transition: background 0.18s ease, color 0.18s ease; }
+    .batch-clear svg { width: 13px; height: 13px; opacity: 0.8; }
+    .batch-clear:hover { background: #f2f5f9; color: #55657a; filter: none; transform: none; }
     .batch-clear:hover { background: none; filter: none; transform: none; color: #3e6b9b; }
     /* 单行显示，超出部分在格子里横向滑动，不换行、不撑高行 */
     td .cell { overflow-x: auto; overflow-y: hidden; white-space: nowrap; /* 常驻 3px 横向拖动条，只有内容溢出时才出现 */ /* 别加 scrollbar-width/color，会让下面 ::-webkit-scrollbar 全部失效 */ margin-bottom: -3px; }
@@ -2579,6 +2628,30 @@ async exportConfig(request, env, ctx) {
           }
           if (batchDeleteConfirm) {
             batchDeleteConfirm.addEventListener('click', function () { issueBatch('delete'); });
+          }
+
+          const batchReorderBtn = document.getElementById('batchReorderBtn');
+          if (batchReorderBtn) {
+            batchReorderBtn.addEventListener('click', function() {
+              if (selectedIds.size === 0) return;
+              const ids = Array.from(selectedIds);
+              batchReorderBtn.disabled = true;
+              fetch('/api/config/batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'reorder', ids: ids })
+              }).then(res => res.json())
+                .then(data => {
+                  if (data.code !== 200) {
+                    showMessage(data.message || '操作失败', 'error');
+                    return;
+                  }
+                  showMessage('已重新排序 ' + ids.length + ' 个网站', 'success');
+                  selectedIds.clear();
+                  fetchConfigs(currentPage, currentSearchKeyword);
+                }).catch(() => showMessage('网络错误', 'error'))
+                .finally(function () { batchReorderBtn.disabled = false; });
+            });
           }
 
           const batchExportBtn = document.getElementById('batchExportBtn');
