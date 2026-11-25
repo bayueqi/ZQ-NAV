@@ -1687,6 +1687,7 @@ async exportConfig(request, env, ctx) {
     .toolbar-btn-settings:hover { background: #eef3f9; border-color: #c6d5e6; filter: none; }
     .modal-content h2 { margin: 0 0 16px; font-size: 1.15rem; color: #2d3748; font-weight: 600; }
     .modal-confirm { max-width: 340px; margin-top: 18%; }
+    .confirm-desc { margin: 0 0 20px; color: #4a5568; font-size: 0.92rem; line-height: 1.5; word-break: break-all; }
     .confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
     .confirm-btn { padding: 9px 18px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; color: #4a5568; font-family: inherit; font-size: 0.9rem; font-weight: 500; cursor: pointer; transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease; }
     .confirm-btn:hover { background: #f7fafc; border-color: #d5dbe3; }
@@ -1833,8 +1834,8 @@ async exportConfig(request, env, ctx) {
     .actions button { padding: 6px 12px; font-size: 0.8rem; border-radius: 8px; font-weight: 500; white-space: nowrap; flex: 0 0 auto; }
     .edit-btn { background: #fff !important; color: #3e6b9b !important; border: 1px solid #dbe4ef !important; box-shadow: none; }
     .edit-btn:hover { background: #eef3f9 !important; border-color: #c6d5e6 !important; }
-    .del-btn { background: #fff !important; color: #b0473f !important; border: 1px solid #ecdbd8 !important; box-shadow: none; }
-    .del-btn:hover { background: #fdf4f3 !important; border-color: #e3c4c0 !important; }
+    .del-btn { background: #fdf5f4 !important; color: #a2402f !important; border: 1px solid #e8cbc6 !important; box-shadow: none; }
+    .del-btn:hover { background: #fbebe8 !important; border-color: #d9b0a9 !important; color: #8f3527 !important; }
     /* 搜索框 */
     .search-input { width: 100%; box-sizing: border-box; border-radius: 12px !important; background: rgba(255,255,255,0.7) !important; }
     @media (max-width: 768px) {
@@ -2728,8 +2729,37 @@ async exportConfig(request, env, ctx) {
             document.getElementById('editSortOrder').value = configToEdit.sort_order === 9999 ? '' : configToEdit.sort_order;
             editModal.style.display = 'block';
           }
+          // 创建删除确认弹窗（动态创建，避免依赖 html 缓存）
+          const deleteModal = document.createElement('div');
+          deleteModal.className = 'modal';
+          deleteModal.style.display = 'none';
+          deleteModal.innerHTML = \`
+            <div class="modal-content modal-confirm">
+              <h2>删除书签</h2>
+              <p class="confirm-desc">确定要删除该书签吗？删除后不可恢复。</p>
+              <div class="confirm-actions">
+                <button type="button" class="confirm-btn" data-action="cancel">取消</button>
+                <button type="button" class="confirm-btn confirm-btn-danger" data-action="confirm">删除</button>
+              </div>
+            </div>
+          \`;
+          document.body.appendChild(deleteModal);
+          let pendingDeleteId = null;
+          deleteModal.querySelector('[data-action="cancel"]').addEventListener('click', function () {
+            deleteModal.style.display = 'none';
+            pendingDeleteId = null;
+          });
+          deleteModal.querySelector('[data-action="confirm"]').addEventListener('click', function () {
+            const id = pendingDeleteId;
+            deleteModal.style.display = 'none';
+            pendingDeleteId = null;
+            if (id != null) doDelete(id);
+          });
           function handleDelete(id) {
-            if(!confirm('确认删除？')) return;
+            pendingDeleteId = id;
+            deleteModal.style.display = 'block';
+          }
+          function doDelete(id) {
              fetch(\`/api/config/\${id}\`, {
                   method: 'DELETE'
               }).then(res => res.json())
@@ -2787,10 +2817,11 @@ async exportConfig(request, env, ctx) {
           }
           addBtn.addEventListener('click', openAddModal);
           if (addModalClose) addModalClose.addEventListener('click', closeAddModal);
-          // 点击遮罩关闭
+          // 添加站点弹窗仅允许点击右上角 × 关闭：点击遮罩/弹窗外区域不关闭
+          // 同时阻止遮罩上的点击继续冒泡，避免被后续任何 document 级点击处理器误判为关闭
           if (addModal) {
             addModal.addEventListener('click', function(e) {
-              if (e.target === addModal) closeAddModal();
+              if (e.target === addModal) e.stopPropagation();
             });
           }
           // 提交添加（表单 submit）
